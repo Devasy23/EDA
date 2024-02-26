@@ -1,0 +1,2248 @@
+---
+title: 'Back to (predict) the future - Interactive M5 EDA'
+date: '`r Sys.Date()`'
+output:
+  html_document:
+    number_sections: true
+    fig_caption: true
+    toc: true
+    fig_width: 7
+    fig_height: 4.5
+    theme: cosmo
+    highlight: tango
+    code_folding: hide
+---
+
+```{r setup, include=FALSE, echo=FALSE}
+knitr::opts_chunk$set(echo=TRUE, error=FALSE)
+knitr::opts_chunk$set(out.width="100%", fig.height = 4.5, split=FALSE, fig.align = 'default')
+options(dplyr.summarise.inform = FALSE)
+```
+
+
+<div 
+    style="background-image: url('https://images.unsplash.com/photo-1528399783831-8318d62d10e5?ixlib=rb-1.2.1&ixid=eyJhcHBfaWQiOjEyMDd9&auto=format&fit=crop&w=967&q=80'); 
+    width:100%; 
+    height:400px; 
+    background-position:center;">&nbsp;
+</div>
+
+*Photo by Fabio Bracht (@bracht) on Unsplash.*
+
+
+
+# Introduction
+
+*Welcome to an extensive Exploratory Data Analysis for the 5th Makridakis forecasting competitions (M5)!* This notebook will grow over the coming days and weeks into a deep dive of all the relevant aspects of this challenge. Here's all you need to know to get started:
+
+*Some Background:* the [Makridakis competitions](https://en.wikipedia.org/wiki/Makridakis_Competitions) (or *M-competitions*), organised by forecasting expert [Spyros Makridakis](https://en.wikipedia.org/wiki/Spyros_Makridakis), aim to provide a better understanding and advancement of forecasting methodology by comparing the performance of different methods in solving a well-defined, real-world problem. The first M-competition was held in 1982. The [forth competition (M4)](https://www.sciencedirect.com/science/article/pii/S0169207019301128) ran in 2018 and featured "100,000 time series and 61 forecasting methods" (source in link). According to forecasting researcher and practitioner [Rob Hyndman](https://robjhyndman.com/hyndsight/) the M-competitions "have had an enormous influence on the field of forecasting. They focused attention on what models produced good forecasts, rather than on the mathematical properties of those models". This empirical approach is very similar to Kaggle's trade-mark way of having the best machine learning algorithms engage in intense competition on diverse datasets. M5 is the first M-competition to be held on Kaggle.
+
+**The goal:** We have been challenged to **predict sales data** provided by the retail giant [Walmart](https://en.wikipedia.org/wiki/Walmart) **28 days** into the future. This competition will run in 2 tracks: In addition to forecasting the values themselves in the [Forecasting competition](https://www.kaggle.com/c/m5-forecasting-accuracy/), we are simultaneously tasked to **estimate the uncertainty** of our predictions in the [Uncertainty Distribution competition](https://www.kaggle.com/c/m5-forecasting-uncertainty). Both competitions will have the same 28 day forecast horizon.
+
+
+**The data:** We are working with **42,840 hierarchical time series**. [The data](https://www.kaggle.com/c/m5-forecasting-accuracy/data) were obtained in the 3 US states of California (CA), Texas (TX), and Wisconsin (WI). "Hierarchical" here means that data can be aggregated on different levels: item level, department level, product category level, and state level. The sales information reaches back from Jan 2011 to June 2016. In addition to the sales numbers, we are also given corresponding data on prices, promotions, and holidays. Note, that we have been warned that **most of the time series contain zero values.** 
+
+The data comprises **3049** individual products from *3 categories* and *7 departments*, sold in *10 stores* in *3 states*. The hierachical aggregation captures the combinations of these factors. For instance, we can create 1 time series for all sales, 3 time series for all sales per state, and so on. The largest category is sales of all individual 3049 products per 10 stores for 30490 time series.
+
+The training data comes in the shape of 3 separate files:
+
+- `sales_train.csv`: this is our main training data. It has 1 column for each of the 1941 days from 2011-01-29 and 2016-05-22; not including the validation period of 28 days until 2016-06-19. It also includes the IDs for item, department, category, store, and state. The number of rows is 30490 for all combinations of 30490 items and 10 stores.
+
+- `sell_prices.csv`: the store and item IDs together with the sales price of the item as a weekly average.
+
+- `calendar.csv`: dates together with related features like day-of-the week, month, year, and an 3 binary flags for whether the stores in each state allowed purchases with [SNAP food stamps](https://www.benefits.gov/benefit/361) at this date (1) or not (0).
+
+
+**The metrics:**
+
+- The point forecast submission are being [evaluated](https://www.kaggle.com/c/m5-forecasting-accuracy/overview/evaluation) using the **Root Mean Squared Scaled Error (RMSSE)**, which is derived from the [Mean Absolute Scaled Error (MASE)](https://en.wikipedia.org/wiki/Mean_absolute_scaled_error) that was designed to be scale invariant and symmetric. In a similar way to the MASE, the RMSSE is scale invariant and symmetric, and measures the prediction error (i.e. `forecast - truth`) relative to a "naive forecast" that simply assumes that step i = step i-1. In contrast to the MASE, here both prediction error and naive error are scaled to account for the goal of estimating average values in the presence of many zeros.
+
+- The uncertainy distributions are being [evaluated](https://www.kaggle.com/c/m5-forecasting-uncertainty/overview/evaluation) using the **Weighted Scaled Pinball Loss (WSPL)**. We are asked to provide the 50%, 67%, 95%, and 99% uncertainty intervals together with the forecasted median.
+
+- Both metrics are computed for each time series and then averaged accross all time series including weights. The weights are proportional to the sales volume of the item, in dollars, to give more importance to high selling products. Note, that the weights are based on the last 28 days of the training data, and that those dates will be adjusted for the ultimate evaluation data, as [confirmed by the organisers](https://www.kaggle.com/c/m5-forecasting-accuracy/discussion/134244).
+
+
+**Need some inspiration?** Beyond this notebook, I recommend you to check out other recent Kaggle time series competitions such as [Wiki Traffic Forecasting](https://www.kaggle.com/c/web-traffic-time-series-forecasting), [Favorita Grocery Sales Forecasting](https://www.kaggle.com/c/favorita-grocery-sales-forecasting/), [Recruit Restaurant](https://www.kaggle.com/c/recruit-restaurant-visitor-forecasting), or [ASHRAE](https://www.kaggle.com/c/ashrae-energy-prediction/overview) and read the Kernels and top ranking write-ups. Also, note that a few years ago Kaggle ran two Walmart recruiting competitions with the goal to forecast sales: [Recruiting 1](https://www.kaggle.com/c/walmart-recruiting-store-sales-forecasting/overview) and [Recruiting 2](https://www.kaggle.com/c/walmart-recruiting-sales-in-stormy-weather/overview). Last but not least, there was a relevant [Playground competition](https://www.kaggle.com/c/demand-forecasting-kernels-only) a few years ago.
+
+Let's get started!
+
+
+# Preparations {.tabset .tabset-fade .tabset-pills}
+
+## Load libraries
+
+We load a range of libraries for general data wrangling and general visualisation together with more specialised tools for time series forecasting.
+
+```{r, message = FALSE}
+# general visualisation
+library('ggplot2') # visualisation
+library('scales') # visualisation
+library('patchwork') # visualisation
+library('RColorBrewer') # visualisation
+library('corrplot') # visualisation
+
+# general data manipulation
+library('dplyr') # data manipulation
+library('readr') # input/output
+library('vroom') # input/output
+library('skimr') # overview
+library('tibble') # data wrangling
+library('tidyr') # data wrangling
+library('purrr') # data wrangling
+library('stringr') # string manipulation
+library('forcats') # factor manipulation
+library('fuzzyjoin') # data wrangling
+
+# specific visualisation
+library('alluvial') # visualisation
+library('ggrepel') # visualisation
+library('ggforce') # visualisation
+library('ggridges') # visualisation
+library('gganimate') # animations
+library('GGally') # visualisation
+library('ggthemes') # visualisation
+library('wesanderson') # visualisation
+library('kableExtra') # display
+
+# Date + forecast
+library('lubridate') # date and time
+library('forecast') # time series analysis
+#library('prophet') # time series analysis
+library('timetk') # time series analysis
+
+# Interactivity
+library('crosstalk')
+library('plotly')
+
+# parallel
+library('foreach')
+library('doParallel')
+```
+
+
+## Helper functions
+
+A short helper function to compute binomial confidence intervals.
+
+```{r}
+# function to extract binomial confidence levels
+get_binCI <- function(x,n) as.list(setNames(binom.test(x,n)$conf.int, c("lwr", "upr")))
+```
+
+
+## Load data
+
+```{r echo=FALSE}
+if (dir.exists("/kaggle")){
+  path <- "/kaggle/input/m5-forecasting-accuracy/"
+} else {
+  path <- ""
+}
+```
+
+
+We use R's new [vroom](https://cran.r-project.org/web/packages/vroom/vignettes/vroom.html) package which reads data as fast as its onomatopoeic name implies:
+
+```{r warning=FALSE, results=FALSE}
+train <- vroom(str_c(path,'sales_train_validation.csv'), delim = ",", col_types = cols())
+prices <- vroom(str_c(path,'sell_prices.csv'), delim = ",", col_types = cols())
+calendar <- read_csv(str_c(path,'calendar.csv'), col_types = cols())
+
+sample_submit <- vroom(str_c(path,'sample_submission.csv'), delim = ",", col_types = cols())
+```
+
+
+
+
+# Quick Look: File structure and content {.tabset .tabset-fade .tabset-pills}
+
+As a first step let's have a quick look of the data sets using the `head`, `summary`, and `glimpse` tools where appropriate.
+
+
+## Training sales data
+
+Here are the first 10 columns and rows of the our training sales data:
+
+```{r}
+train %>% 
+  select(seq(1,10,1)) %>% 
+  head(10) %>% 
+  kable() %>% 
+  kable_styling()
+```
+
+We find:
+
+- There is one column each for the IDs of item, department, category, store, and state; plus a general ID that is a combination of the other IDs plus a flag for validation.
+
+- The sales per date are encoded as columns starting with the prefix `d_`. Those are the number of units sold per day (not the total amount of dollars).
+
+- We already see that there are quite a lot of zero values.
+
+
+This data set has too many columns and rows to display them all:
+
+```{r}
+c(ncol(train),nrow(train))
+```
+
+All IDs are marked as "validation". This refers to the intial validation testing period of the competition, before we ultimately predict a different 28-days period.
+
+```{r}
+train %>% 
+  mutate(dset = if_else(str_detect(id, "validation"), "validation", "training")) %>% 
+  count(dset)
+```
+
+
+## Sales prices
+
+This data set gives us the weekly price changes per item:
+
+```{r}
+prices %>% 
+  head(10) %>% 
+  kable() %>% 
+  kable_styling()
+```
+
+```{r}
+summary(prices)
+```
+
+
+We find:
+
+- We have the `store_id` and `item_id` to link this data to our training and validation data.
+
+- Prices range from $0.10 to a bit more than 100 dollars.
+
+
+## Calendar
+
+The calendar data gives us date features such as weekday, month, or year; alongside 2 different event features and a SNAP food stamps flag:
+
+```{r}
+calendar %>% 
+  head(8) %>% 
+  kable() %>% 
+  kable_styling()
+```
+
+```{r}
+glimpse(calendar)
+```
+
+
+```{r}
+summary(calendar)
+```
+
+
+We find:
+
+- The calendar has all the relevant dates, weekdays, months plus snap binary flags and logical event columns.
+
+- There are only `r nrow(calendar) - sum(is.na(calendar$event_name_2))` non-NA rows in the `event_name_2` column; i.e. only 5 (out of 1969) instances where there is more than 1 event on a particular day.
+
+
+## Missing values & zero values
+
+There are no missing values in our sales training data:
+
+```{r}
+sum(is.na(train))
+```
+
+However, there are a lot of zero values, here we plot the distribution of zero percentages among all time series:
+
+```{r fig.cap ="Fig. 1"}
+bar <- train %>% 
+  select(-contains("id")) %>% 
+  na_if(0) %>% 
+  is.na() %>% 
+  as_tibble() %>% 
+  mutate(sum = pmap_dbl(select(., everything()), sum)) %>% 
+  mutate(mean = sum/(ncol(train) - 1)) %>% 
+  select(sum, mean)
+  
+bar %>% 
+  ggplot(aes(mean)) +
+  geom_density(fill = "blue") +
+  scale_x_continuous(labels = scales::percent) +
+  coord_cartesian(xlim = c(0, 1)) +
+  theme_hc() +
+  theme(axis.text.y = element_blank()) +
+  labs(x = "", y = "", title = "Density for percentage of zero values - all time series")
+  
+```
+
+This means that only a minority of time series have less than 50% of zero values. The peak is rather close to 100%
+
+
+
+# Visual Overview: Interactive time series plots
+
+We will start our visual exploration by investigating a number of time series plots on different aggregation levels. Here is a short helper function to transform our wide data into a long format with a `dates` column in date format:
+
+```{r}
+extract_ts <- function(df){
+  
+  min_date <- date("2011-01-29")
+  
+  df %>%
+    select(id, starts_with("d_")) %>%  
+    pivot_longer(starts_with("d_"), names_to = "dates", values_to = "sales") %>%
+    mutate(dates = as.integer(str_remove(dates, "d_"))) %>% 
+    mutate(dates = min_date + dates - 1) %>% 
+    mutate(id = str_remove(id, "_validation"))
+}
+
+set.seed(4321)
+foo <- train %>% 
+  sample_n(50)
+
+ts_out <- extract_ts(foo)
+
+cols <- ts_out %>% 
+  distinct(id) %>% 
+  mutate(cols = rep_len(brewer.pal(7, "Set2"), length.out = n_distinct(ts_out$id)))
+
+ts_out <- ts_out %>% 
+  left_join(cols, by = "id")
+
+pal <- cols$cols %>%
+   setNames(cols$id)
+```
+
+
+## Individual item-level time series - random sample
+
+Here we will sample 50 random time series from our training sample to get an idea about the data.
+
+In the following plot, you can select the id of a time series (which is a concatenation of store and department) to display only the graphs that you're interested in. 
+
+Currently, I don't see a way to avoid having all time series plotted at the beginning. Select 1 from the input field to begin:
+
+```{r warning=FALSE,  fig.cap ="Fig. 2"}
+shared_ts <- highlight_key(ts_out)
+
+palette(brewer.pal(9, "Set3"))
+
+gg <- shared_ts %>% 
+  ggplot(aes(dates, sales, col = id, group = id)) +
+  geom_line() +
+  scale_color_manual(values = pal) +
+  labs(x = "Date", y = "Sales") +
+  theme_tufte() +
+  NULL
+
+filter <- bscols(
+  filter_select("ids", "Sales over time: Select a time series ID (remove with backspace key, navigate with arrow keys):", shared_ts, ~id, multiple = TRUE),
+  ggplotly(gg, dynamicTicks = TRUE),
+  widths = c(12, 12)
+)
+
+bscols(filter)
+```
+
+We find:
+
+- Most time series have pretty low daily count statistics, alongside the large percentage of zero numbers we already noticed. On the one hand, this suggests that spikes are not going to be overly pronounced. But it also indicates that accurate forecasts will have to deal with quite a lot of noise.
+
+- Some of our sample time series start in the middle of the time range, and some have long gaps in between. This is an additional challenge.
+
+
+Notes:
+
+- I have assigned one of 7 [colour brewer](https://rdrr.io/cran/RColorBrewer/man/ColorBrewer.html) colour-blind friendly colours ("Set2") to each time series (cycling through the selection sequentially). Those will typically provide a good contrast for a reasonable number of simultaneous plots, but sometimes two time series might have the same colour.
+
+- I got the inspiration to use the [crosstalk](https://cran.r-project.org/web/packages/crosstalk/index.html) package for building this plot from the excellent [dashboard kernel](https://www.kaggle.com/tavoosi/suicide-data-full-interactive-dashboard) by [Saba Tavoosi](https://www.kaggle.com/tavoosi). Make sure to check it out.
+
+
+## All aggregate sales
+
+After peeking at some of the individual time series and finding a lot of zero values, we will now do some aggregation to get some decent statistics.
+
+First off, here we plot the aggregate time series over all items, stores, categories, departments and sales. This is an interactive plot and you can use the usual plotly tools (upper right corner) to zoom, pan, and scale the view.
+
+```{r fig.cap ="Fig. 3"}
+foo <- train %>% 
+  summarise_at(vars(starts_with("d_")), sum) %>% 
+  mutate(id = 1)
+
+bar <- extract_ts(foo)
+
+gg <- bar %>% 
+  ggplot(aes(dates, sales)) +
+  geom_line(col = "blue") +
+  theme_tufte() +
+  labs(x = "Date", y = "Sales", title = "All aggregate sales")
+
+ggplotly(gg, dynamicTicks = TRUE)
+```
+
+We find:
+
+- The sales are generally going up, which I suppose is good news for Walmart. We can make out some yearly seasonality, and a dip at Christmas, which is [the only day of the year](https://www.countryliving.com/shopping/a23899891/walmart-christmas-hours/) when the stores are closed. 
+
+- Zooming in, we can see strong weekly seasonality plus possibly some additional overlaying patterns with shorter periods than yearly.
+
+- The most recent 2016 sales numbers appear to grow a bit faster than in previous years.
+
+
+## Sales per State
+
+To get a bit more out of these big picture views we will look at the sales per state on a monthly aggregate level. This is another interactive `ggplotly` graph:
+
+```{r fig.cap ="Fig. 4"}
+foo <- train %>%
+  group_by(state_id) %>% 
+  summarise_at(vars(starts_with("d_")), sum) %>% 
+  rename(id = state_id)
+
+bar <- extract_ts(foo) %>% 
+  mutate(month = month(dates),
+         year = year(dates)) %>% 
+  group_by(month, year, id) %>% 
+  summarise(sales = sum(sales),
+            dates = min(dates)) %>% 
+  ungroup() %>% 
+  filter(str_detect(as.character(dates), "..-..-01")) %>% 
+  filter(dates != max(dates))
+
+gg <- bar %>% 
+  ggplot(aes(dates, sales, col = id)) +
+  geom_line() +
+  theme_tufte() +
+  labs(x = "Date", y = "Sales", title = "Monthly Sales per State")
+
+ggplotly(gg, dynamicTicks = TRUE)
+```
+
+We find:
+
+- California (CA) sells more items in general, while Wisconsin (WI) was slowly catching up to Texas (TX) and eventually surpassed it in the last months of our training data.
+
+- CA has pronounced dips in 2013 and 2015 that appear to be present in the other states as well, just less severe. These dips and peaks don't appear to always occur (see 2012) but they might primarily reflect the yearly seasonality we noticed already.
+
+
+## Sales per Store & Category
+
+There are 10 stores, 4 in CA and 3 each in TX and WI, and 3 categories: Foods, Hobbies, and Household. Here we're switching up our visualisation strategy a bit by including all of those in the same, non-interactive layout. We will again use monthly aggregates to keep the plots clean.
+
+This visual uses the a facetted view for the stores (1 facet per state) and the great [patchwork](https://patchwork.data-imaginist.com/) package to arrange the individual plots, including a count of all category occurences:
+
+
+```{r fig.cap ="Fig. 5", fig.height=6.5}
+foo <- train %>%
+  group_by(cat_id) %>% 
+  summarise_at(vars(starts_with("d_")), sum) %>% 
+  rename(id = cat_id)
+
+bar <- train %>%
+  group_by(store_id) %>% 
+  summarise_at(vars(starts_with("d_")), sum) %>% 
+  rename(id = store_id)
+
+p1 <- extract_ts(foo) %>% 
+  mutate(month = month(dates),
+         year = year(dates)) %>% 
+  group_by(month, year, id) %>% 
+  summarise(sales = sum(sales),
+            dates = min(dates)) %>% 
+  ungroup() %>% 
+  filter(str_detect(as.character(dates), "..-..-01")) %>% 
+  filter(dates != max(dates)) %>% 
+  ggplot(aes(dates, sales, col = id)) +
+  geom_line() +
+  theme_hc() +
+  theme(legend.position = "none") +
+  labs(title = "Sales per Category", x = "Date", y = "Sales")
+
+p2 <- train %>% 
+  count(cat_id) %>% 
+  ggplot(aes(cat_id, n, fill = cat_id)) +
+  geom_col() +
+  theme_hc() +
+  theme(legend.position = "none") +
+  theme(axis.text.x = element_text(size = 7)) +
+  labs(x = "", y = "", title = "Rows per Category")
+
+p3 <- extract_ts(bar) %>% 
+  mutate(month = month(dates),
+         year = year(dates)) %>% 
+  group_by(month, year, id) %>% 
+  summarise(sales = sum(sales),
+            dates = min(dates)) %>% 
+  ungroup() %>% 
+  filter(str_detect(as.character(dates), "..-..-01")) %>% 
+  filter(dates != max(dates)) %>% 
+  mutate(state_id = str_sub(id, 1, 2)) %>% 
+  ggplot(aes(dates, sales, col = id)) +
+  geom_line() +
+  theme_hc() +
+  theme(legend.position = "bottom") +
+  labs(title = "Sales per Store", x = "Date", y = "Sales", col = "Store ID") +
+  facet_wrap(~state_id)
+
+layout <- "
+AAB
+CCC
+"
+
+p1 + p2 + p3 + plot_layout(design = layout)
+```
+
+We find:
+
+- "Foods" are the most common category, followed by "Household" which is still quite a bit above "Hobbies". The number of "Household" rows is closer to the number of "Foods" rows than the corresponding sales figures, indicating that more "Foods" units are sold than "Household" ones.
+
+- In terms of stores, we see that the TX stores are quite close together in sales; with "TX_3" rising from the levels of "TX_1" to the level of "TX_2" over the time of our training data. The WI stores "WI_1" and "WI_2" show a curious jump in sales in 2012, while "WI_3" shows a long dip over several year.
+
+- The CA stores are relatively well separated in store volume. Note "CA_2", which declines to the "CA_4" level in 2015, only to recover and jump up to "CA_1" sales later in the year.
+
+
+## Sales per Department
+
+Our data has 7 departments, 3 for "FOODS" and 2 each for "HOBBIES" and "HOUSEHOLD". Together with the 3 states those are 21 levels. Let's see whether we can fit them all in a single facet grid plot.
+
+
+```{r fig.cap ="Fig. 5", fig.height=5.5}
+min_date <- date("2011-01-29")
+
+foo <- train %>%
+  group_by(dept_id, state_id) %>% 
+  summarise_at(vars(starts_with("d_")), sum) %>% 
+  ungroup() %>% 
+  select(ends_with("id"), starts_with("d_")) %>%  
+  pivot_longer(starts_with("d_"), names_to = "dates", values_to = "sales") %>%
+  mutate(dates = as.integer(str_remove(dates, "d_"))) %>% 
+  mutate(dates = min_date + dates - 1)
+
+foo %>% 
+  mutate(month = month(dates),
+         year = year(dates)) %>% 
+  group_by(month, year, dept_id, state_id) %>% 
+  summarise(sales = sum(sales),
+            dates = min(dates)) %>% 
+  ungroup() %>% 
+  filter(str_detect(as.character(dates), "..-..-01")) %>% 
+  filter(dates != max(dates)) %>% 
+  ggplot(aes(dates, sales, col = dept_id)) +
+  geom_line() +
+  facet_grid(state_id ~ dept_id) +
+  theme_tufte() +
+  theme(legend.position = "none", strip.text.x = element_text(size = 8)) +
+  labs(title = "Sales per Department and State", x = "Date", y = "Sales")
+```
+
+We find:
+
+- "FOODS_3" is clearly driving the majority of "FOODS" category sales in all states. "FOODS_2" is picking up a bit towards the end of the time range, especially in "WI".
+
+- Similarly, "HOUSEHOLD_1" is clearly outselling "HOUSEHOLD_2". "HOBBIES_1" is on a higher average sales level than "HOBBIES_2", but both are not showing much development over time.
+
+
+## Seasonalities - global
+
+Moving on from the time series views, at least for the moment, we are changing up our visuals to study seasonalities. Here is a heat map that combines the weekly and yearly seasonalities.
+
+Because of the general increasing trend in sales, we're not looking at absolute sales values. Instead, we aim to model this trend using a smoothed (LOESS) fit which we then subtract from the data. The heatmap shows the relative changes. Note, that I removed the Christmas dips because they would be distracting for the purpose of this plot:
+
+```{r fig.cap ="Fig. 6", fig.height=6.5}
+foo <- train %>% 
+  summarise_at(vars(starts_with("d_")), sum) %>% 
+  mutate(id = 1)
+
+bar <- extract_ts(foo) %>% 
+  filter(!str_detect(as.character(dates), "-12-25"))
+
+loess_all <- predict(loess(bar$sales ~ as.integer(bar$dates - min(bar$dates)) + 1, span = 1/2, degree = 1))
+
+bar <- bar %>% 
+  mutate(loess = loess_all) %>% 
+  mutate(sales_rel = sales - loess)
+
+p1 <- bar %>% 
+  ggplot(aes(dates, sales)) +
+  geom_line(col = "blue", alpha = 0.5) +
+  geom_line(aes(dates, loess), col = "black") +
+  theme_hc() +
+  labs(x = "", y = "Sales", title = "Total Sales with Smoothing Fit + Seasonality in Residuals")
+
+p2 <- bar %>% 
+  mutate(wday = wday(dates, label = TRUE, week_start = 1),
+         month = month(dates, label = TRUE),
+         year = year(dates)) %>% 
+  group_by(wday, month, year) %>% 
+  summarise(sales = sum(sales_rel)/1e3) %>%
+  ggplot(aes(month, wday, fill = sales)) +
+  geom_tile() +
+  labs(x = "Month of the year", y = "Day of the week", fill = "Relative Sales [1k]") +
+  scale_fill_distiller(palette = "Spectral") +
+  theme_hc()
+
+p1 / p2
+```
+
+We find:
+
+- The weekly pattern is strong, with Sat and Sun standing out prominently. Also Monday seems to benefit a bit from the weekend effect.
+
+- The months of Nov and Dec show clear dips, while the summer months May, Jun, and Jul suggest a milder secondary dip. Certain holidays, like the 4th of July, might somewhat influence these patterns; but over 5 years they should average out reasonably well.
+
+- I already tweaked the smoothing fit parameters a bit, but they could probably be optimised further. Still, it looks quite good for the first try.
+
+
+Let's stay with the seasonalities for a little while longer and go one or two levels deeper.
+
+Next, we'll look at the weekly and monthly patterns on a state level. We're using the same smoothing approach which is shown in the upper panels for reference. Here, I will scale each individual time series by its global mean to allow for a better comparison between the three states.
+
+The colours are the same throughout the layout; see the upper panels for reference:
+
+```{r fig.cap ="Fig. 7", fig.height=5.5}
+foo <- train %>%
+  group_by(state_id) %>% 
+  summarise_at(vars(starts_with("d_")), sum) %>% 
+  rename(id = state_id)
+
+bar <- extract_ts(foo) %>% 
+  filter(!str_detect(as.character(dates), "-12-25")) %>% 
+  group_by(id) %>% 
+  mutate(loess = predict(loess(sales ~ as.integer(dates - min(dates)) + 1, span = 1/2, degree = 1)),
+         mean_sales = mean(sales)) %>% 
+  mutate(sales_rel = (sales - loess)/mean_sales)
+
+p1 <- bar %>% 
+  ggplot(aes(dates, sales, col = id)) +
+  geom_line() +
+  geom_line(aes(dates, loess), col = "black") +
+  facet_wrap(~ id) +
+  theme_tufte() +
+  theme(legend.position = "none") +
+  labs(x = "", y = "Sales", title = "Sales per State with Seasonalities")
+
+
+p2 <- bar %>% 
+  ungroup() %>%
+  mutate(wday = wday(dates, label = TRUE, week_start = 1)) %>% 
+  group_by(id, wday) %>% 
+  summarise(sales = sum(sales_rel)) %>%
+  ungroup() %>% 
+  ggplot(aes(wday, sales, group = id, col = id)) +
+  geom_line(size = 1.5) +
+  theme_tufte() +
+  theme(legend.position = "none") +
+  labs(x = "", y = "Relative Sales", title = "Weekly Seasonality")
+  
+p3 <- bar %>% 
+  ungroup() %>%
+  mutate(month = month(dates, label = TRUE)) %>% 
+  group_by(id, month) %>% 
+  summarise(sales = sum(sales_rel)) %>%
+  ungroup() %>% 
+  ggplot(aes(month, sales, group = id, col = id)) +
+  geom_line(size = 1.5) +
+  theme_tufte() +
+  theme(legend.position = "none") +
+  labs(x = "", y = "Relative Sales", title = "Monthly Seasonality")
+  
+layout <- "
+AAAAA
+BBCCC
+"
+
+p1 + p2 + p3 + plot_layout(design = layout)
+```
+
+We find:
+
+- After scaling, the weekday vs weekend pattern is very similar for all 3 states, except for an interesting downturn in Sunday sales in WI.
+
+- The monthly seasonalities are indeed complex. There is a dip in the winter months and a second, generally shallower dip around May. WI is again the odd state out: it sells notably less in the summer compared to TX and especially CA; so much so that the Feb/Aug ratio is inverted for WI vs CA/TX.
+
+
+The logical next step is to look at the Seasonalities per Category, since you wouldn't necessarily expect food and household item shopping to follow the same patterns. I will also break up this view by state, following the insights we just saw above.
+
+Again, we are subtracting the trend and scaling by the global mean:
+
+```{r fig.cap ="Fig. 8", fig.height=5.5}
+# sum by cat + state, pivoting dates
+foo <- train %>%
+  group_by(cat_id, state_id) %>% 
+  summarise_at(vars(starts_with("d_")), sum) %>% 
+  ungroup() %>% 
+  select(ends_with("id"), starts_with("d_")) %>%  
+  pivot_longer(starts_with("d_"), names_to = "dates", values_to = "sales") %>%
+  mutate(dates = as.integer(str_remove(dates, "d_"))) %>% 
+  mutate(dates = min_date + dates - 1)
+
+# fit loess and subtract
+bar <- foo %>% 
+  filter(!str_detect(as.character(dates), "-12-25")) %>% 
+  group_by(cat_id, state_id) %>% 
+  mutate(loess = predict(loess(sales ~ as.integer(dates - min(dates)) + 1, span = 2/3, degree = 1)),
+         mean_sales = mean(sales)) %>% 
+  mutate(sales_rel = (sales - loess)/mean_sales)
+
+# bar %>% 
+#   ggplot(aes(dates, sales, col = cat_id)) +
+#   geom_line() +
+#   geom_line(aes(dates, loess), col = "black") +
+#   facet_grid(cat_id ~ state_id) +
+#   theme_tufte() +
+#   theme(legend.position = "none") +
+#   labs(x = "", y = "Sales", title = "Sales per State with Seasonalities")
+
+p1 <- bar %>% 
+  ungroup() %>%
+  mutate(wday = wday(dates, label = TRUE, week_start = 1)) %>% 
+  group_by(cat_id, state_id, wday) %>% 
+  summarise(sales = sum(sales_rel)) %>%
+  unite(col = id, ends_with("id"), remove = FALSE) %>%  
+  ggplot(aes(wday, sales, group = id, col = state_id)) +
+  geom_line(size = 1.5) +
+  theme_tufte() +
+  facet_wrap(~cat_id, scales = "free", nrow = 3) +
+  theme(legend.position = "top") +
+  labs(x = "", y = "Relative Sales", title = "Weekly Seasonality and", col = "State")
+  
+p2 <- bar %>% 
+  mutate(month = month(dates, label = TRUE)) %>% 
+  group_by(cat_id, state_id, month) %>% 
+  summarise(sales = sum(sales_rel)) %>%
+  unite(col = id, ends_with("id"), remove = FALSE) %>% 
+  ggplot(aes(month, sales, group = id, col = state_id)) +
+  geom_line(size = 1.5) +
+  theme_tufte() +
+  facet_wrap(~cat_id, scales = "free_y", nrow = 3) +
+  theme(legend.position = "none") +
+  labs(x = "", y = "Relative Sales", title = "Monthly Seasonality by Category & State", col = "State")
+
+layout <- "
+AABBB
+"
+
+p1 + p2 + plot_layout(design = layout)
+```
+
+We find:
+
+- The weekly patterns for the "foods" category are very close for all 3 states, and WI shows some deviations for "hobbies" and "household". We also see the Wisconsin's characteristic Sunday dip for all 3 categories.
+
+- The monthly patterns show some interesting signatures: For "foods", CA and TX are pretty close but WI shows that inverted summer/winter ratio. In contrast, the 3 states are much more similar to each other in the "hobbies" category. And when it comes to "household" items, CA doesn't seem to sell as much of them during the first 3 months of the year but slightly more in the summer; compared to WI and TX.
+
+
+Before we look at the additional explanatory variables, here is a visual representation of the split between training data vs validation data (public leaderboard) vs evaluation data (eventual private leaderboard):
+
+
+```{r fig.cap ="Fig. 9", fig.height = 4.0}
+foo <- extract_ts(train %>% head(1)) %>% 
+  select(dates) %>% 
+  mutate(dset = "training")
+
+bar <- tibble(
+  dates = max(foo$dates) + seq(1,28,1)
+) %>% 
+  mutate(dset = "validation")
+
+foobar <- tibble(
+  dates = max(bar$dates) + seq(1,28,1)
+) %>% 
+  mutate(dset = "evaluation")
+
+foo <- foo %>%
+  bind_rows(bar) %>%
+  bind_rows(foobar) %>%
+  mutate(year = year(dates)) %>% 
+  mutate(dset = fct_relevel(as.factor(dset), c("training", "validation", "evaluation")))
+year(foo$dates) <- 2016
+
+foo %>%
+  filter(!is.na(dates)) %>%
+  ggplot(aes(dates, year, color = dset)) +
+  geom_point(shape = "|", size = 10) +
+  scale_x_date(date_labels = "%b", date_breaks = "1 month") +
+  scale_y_reverse() +
+  theme_hc() +
+  theme(legend.position = "bottom") + #, axis.text.x  = element_text(angle=45, hjust=1, vjust=0.9)) +
+  labs(color = "Data set", x = "Month", y = "Year", title = "Training vs Validation vs Evaluation split over time") +
+  # scale_color_brewer(type = "qual", palette = "Set2") +
+  scale_color_manual(values = wes_palette("FantasticFox1")) +
+  guides(color = guide_legend(override.aes = list(size = 4, pch = 15)))
+```
+
+- This shows the 5+ years of training data together with the 28 days each of validation and evaluation time range.
+
+- The training range goes from 2011-01-29 to 2016-04-24. The validation range spans the following 28 days from 2016-04-25 to 2016-05-22. This is what we are predicting for the initial public leaderboard. Eventually, we will be given the ground truth for this period to train our model for the final evaluation.
+
+- The evaluation range goes from 2016-05-23 to 2016-06-19; another 28 days. This is what the ultimate scoring will be based on.
+
+
+# Explanatory Variables: Prices and Calendar
+
+
+This section will focus on the additional explanatory variables we've been given: item prices and calendar events. In terms of calendar features, we have already used some parameters like day-of-week or month, derived from the date, in the previous section. After studying the basic properties of these datasets, we will also connect them to the time series data.
+
+
+## Calendar
+
+We need some calendar features for the item price table, so let's start with that one.
+
+In the quick view in section 3.3 we see that the `calendar` data frame contains basic features like day-of-week (as character column `weekday` and as integer column `wday`), `month`, `year`, and of course `date`. Alongside the `date` there is also a `d` column which links the date to the column names in the training data. (Our time series extraction function has the starting date as a hard-coded value, but you can also convert from column name to date using the calendar file.)
+
+The other features deal with events and food stamps:
+
+- If you look at section 3.3. you'll see that the columns `event_name_2` and `event_type_2` only contain 5 values that are not NAs, so we're ignoring them here and only focus on the `event_*_1` features.
+
+- The acronym SNAP stands for [Supplemental Nutrition Assistance Program](https://www.benefits.gov/benefit/361). The following is copied from their website: "The Supplemental Nutrition Assistance Program (SNAP) is the largest federal nutrition assistance program. SNAP provides benefits to eligible low-income individuals and families via an Electronic Benefits Transfer card. This card can be used like a debit card to purchase eligible food in authorized retail food stores."
+
+
+```{r fig.cap ="Fig. 10", fig.height = 4.0}
+p1 <- calendar %>% 
+  select(date, event_type_1) %>% 
+  count(event = !is.na(event_type_1)) %>% 
+  add_tally(n, name = "total") %>% 
+  mutate(perc = n/total) %>% 
+  ggplot(aes(event, perc, fill = event)) +
+  geom_col() +
+  scale_y_continuous(labels = scales::percent) +
+  scale_fill_manual(values = c("grey70", "red")) +
+  theme_hc() +
+  theme(legend.position = "none") +
+  labs(x = "", y = "", title = "Days with Events")
+
+p2 <- calendar %>% 
+  filter(!is.na(event_type_1)) %>% 
+  select(date, event_type_1) %>% 
+  count(event_type_1) %>% 
+  add_tally(n, name = "total") %>% 
+  mutate(perc = n/total) %>% 
+  ggplot(aes(reorder(event_type_1, n, FUN = min), perc, fill = event_type_1)) +
+  geom_col() +
+  scale_y_continuous(labels = scales::percent) +
+  coord_flip() +
+  theme_hc() +
+  theme(legend.position = "none") +
+  labs(x = "", y = "", title = "Types of events")
+
+p3 <- calendar %>% 
+  select(date, starts_with("snap")) %>% 
+  pivot_longer(starts_with("snap"), names_to = "state", values_to = "snap") %>% 
+  mutate(state = str_sub(state, 6,7)) %>% 
+  group_by(state, snap) %>% 
+  summarise(n = n()) %>% 
+  add_tally(n, name = "total") %>% 
+  mutate(perc = n/total) %>% 
+  mutate(snap = as.logical(snap)) %>% 
+  ggplot(aes(snap, perc, fill = snap)) +
+  geom_col() +
+  scale_y_continuous(labels = scales::percent) +
+  theme_hc() +
+  facet_wrap(~ state, scales = "free") +
+  theme(legend.position = "none") +
+  labs(x = "", y = "", title = "Days with SNAP purchases: same percentage for all states")
+
+layout <- "
+AABBB
+CCCCC
+"
+
+p1 + p2 + p3 + plot_layout(design = layout)
+```
+
+We find:
+
+- In our calendar coverage (i.e. training + validation + evaluation range) about 8% of days have a special event. Of these events, about 1/3 are Religious (e.g. Orthodox Christmas) and 1/3 are National Holidays (e.g. Independence Day). The remaining third is again split into 2/3 Cultural (e.g. Valentines Day) and 1/3 Sporting events (e.g. SuperBowl).
+
+- Looking at the percentage of days where purchases with SNAP food stamps are allowed in Walmart stores, we find that it is the exact same for each of the 3 states: 650 days or 33%. This is noteworthy.
+
+
+Let's stay with SNAP for a little bit and look at a different style of visual: a calendar view. Here, I'm showing the days for each month in the shape of days-of-week as rows and weeks-of-month as columns; essentially the view a calendar is displayed in a Year view. Then I colour the SNAP days orange and show the same graph for each state:
+
+```{r fig.cap ="Fig. 11", fig.height = 6.5}
+foo <- calendar %>%
+  select(date, starts_with("snap")) %>% 
+  pivot_longer(starts_with("snap"), names_to = "state", values_to = "snap") %>% 
+  mutate(state = str_sub(state, 6,7)) %>% 
+  tk_augment_timeseries_signature()
+
+p1 <- foo %>%
+  filter(!is.na(day)) %>% 
+  filter(year == 2012 & month <= 6 & state == "CA") %>% 
+  #mutate(mweek2 = lead(mweek,1)) %>%
+  #filter(!is.na(mweek2)) %>%
+  #ggplot(aes(mweek2, fct_rev(wday.lbl), fill = as.logical(snap))) + 
+  ggplot(aes(mweek, fct_rev(wday.lbl), fill = as.logical(snap))) + 
+  geom_tile(colour = "white") +
+  geom_text(aes(label = day), size = 2.5) +
+  scale_fill_manual(values = c("grey70", "orange")) +
+  facet_grid(year~month.lbl) + 
+  theme_tufte() +
+  theme(legend.position = "none", axis.text.x = element_blank(), axis.ticks.x = element_blank(),
+        axis.text.y = element_text(size = 8)) +
+  labs(x="", y="", title = "California")
+
+p2 <- foo %>%
+  filter(!is.na(day)) %>% 
+  filter(year == 2012 & month <= 6 & state == "TX") %>% 
+  # mutate(mweek2 = lead(mweek,1)) %>%
+  # filter(!is.na(mweek2)) %>%
+  # ggplot(aes(mweek2, fct_rev(wday.lbl), fill = as.logical(snap))) + 
+  ggplot(aes(mweek, fct_rev(wday.lbl), fill = as.logical(snap))) + 
+  geom_tile(colour = "white") +
+  geom_text(aes(label = day), size = 2.5) +
+  scale_fill_manual(values = c("grey70", "orange")) +
+  facet_grid(year~month.lbl) + 
+  theme_tufte() +
+  theme(legend.position = "none", axis.text.x = element_blank(), axis.ticks.x = element_blank(),
+        axis.text.y = element_text(size = 8)) +
+  labs(x="", y="", title = "Texas")
+
+p3 <- foo %>%
+  filter(!is.na(day)) %>% 
+  filter(year == 2012 & month <= 6 & state == "WI") %>% 
+  # mutate(mweek2 = lead(mweek,1)) %>%
+  # filter(!is.na(mweek2)) %>%
+  # ggplot(aes(mweek2, fct_rev(wday.lbl), fill = as.logical(snap))) + 
+  ggplot(aes(mweek, fct_rev(wday.lbl), fill = as.logical(snap))) + 
+  geom_tile(colour = "white") +
+  geom_text(aes(label = day), size = 2.5) +
+  scale_fill_manual(values = c("grey70", "orange")) +
+  facet_grid(year~month.lbl) + 
+  theme_tufte() +
+  theme(legend.position = "none", axis.text.x = element_blank(), axis.ticks.x = element_blank(),
+        axis.text.y = element_text(size = 8)) +
+  labs(x="", y="", title = "Wisconsin")
+
+p1 / p2 / p3 +
+   plot_annotation(title = 'The same SNAP days each month, but different from state to state')
+```
+
+These are just the first six month of 2012, to keep the plot manageable, but the pattern is always the same:
+
+- SNAP days are always the same days of the month for each month. There are always 10 of them, and the specific days are different from state to state: days 1-10 for CA, days 1-15 without 2, 4, 8, 10, 14 for TX, and days 2-15 without 4, 7, 10, 13 for WI.
+
+- The SNAP days for these 3 states also all happen in the first half of each month, no later than the 15th. This certainly helps to measure their impact and make predictions more robust.
+
+
+
+## Item Prices
+
+We have item price information for each item ID, which includes the `category` and `department` IDs, and its `store` ID, which includes the `state` ID. Let's look at some average overviews first.
+
+Here is a facet grid with overlapping density plots for price distributions within the groups of `category`, `department`, and `state`. Note the logarithmic scale on the x-axes:
+
+```{r fig.cap ="Fig. 12", fig.height = 5}
+foo <- prices %>% 
+  mutate(cat_id = str_sub(item_id, 1, -7)) %>% 
+  mutate(dept_id = str_sub(item_id, -5, -5)) %>% 
+  mutate(state = str_sub(store_id, 1, 2))
+
+foo %>% 
+  ggplot(aes(sell_price, fill = dept_id)) +
+  geom_density(bw = 0.1, alpha = 0.5) +
+  scale_x_log10(breaks = c(0.5, 1, 5, 10, 50)) +
+  coord_cartesian(xlim = c(0.3, 60)) +
+  # facet_wrap(~ cat_id, nrow = 3) +
+  facet_grid(cat_id ~ state) +
+  theme_hc() +
+  theme(legend.position = "bottom") +
+  labs(x = "Average Sales Price [$]", y = "", fill = "Department",
+       title = "Item Prices vary by Category and Department",
+       subtitle = "But distributions are almost identical from State to State")
+```
+
+We find:
+
+- First of all, the distributions are almost identical between the 3 states. There are some minute differences in the "FOODS" category, but this might be due the smoothing bandwidth size. For all practical purposes, I think that we can treat the price distributions as equal.
+
+- There are notable differences between the categories: FOODs are on average cheaper than HOUSEHOLD items. And HOBBIES items span a wider range of prices than the other two; even suggesting a second peak at lower prices.
+
+- Within the categories, we find significant differences, too:
+
+  - Among the three food categories department 3 (i.e. "FOODS_3") does not contain a high-price tail.
+  
+  - The HOBBIES category is the most diverse one, with both departments having quite broad distributions but "HOBBIES_1" accounting for almost all of the items above $10. "HOBBIES_2" has a bimodal structure.
+  
+  - The HOUSEHOLD price distributions are quite similar, but "HOUSEHOLD_2" peaks at clearly higher prices than "HOUSEHOLD_1".
+
+
+Prices are provided as weekly averages. The week ID `wm_yr_wk` can be linked to dates (and sales) using the `calendar` column of the same name.
+
+Here we do just that to extract the item price distributions per category and department for each of the year from 2011 to 2016. We use ridgeline plots provided by the [ggridges package](https://cran.r-project.org/web/packages/ggridges/index.html) to produce stacks of overlapping density graphs:
+
+```{r fig.cap ="Fig. 13", fig.height = 5}
+foo <- prices %>% 
+  mutate(cat_id = str_sub(item_id, 1, -7)) %>% 
+  mutate(dept_id = str_sub(item_id, -5, -5)) %>% 
+  select(cat_id, dept_id, wm_yr_wk, sell_price) %>% 
+  left_join(calendar %>% 
+    select(date, wm_yr_wk) %>% 
+    group_by(wm_yr_wk) %>% 
+    slice(1), by = "wm_yr_wk") %>% 
+  mutate(year = year(date),
+         month = month(date, label = TRUE, abbr = TRUE)) %>% 
+  mutate(year_mon = str_sub(as.character(date), 1, 7)) %>% 
+  ungroup()
+
+foo %>% 
+  sample_frac(0.3) %>% 
+  ggplot(aes(x = sell_price, y = as.factor(year), fill = dept_id)) +
+  geom_density_ridges(bandwidth = 0.1, alpha = 0.5) +
+  scale_x_log10(breaks = c(0.5, 1, 2, 5, 10, 25)) +
+  coord_cartesian(xlim = c(0.4, 30)) +
+  facet_wrap(~ cat_id, nrow = 1) +
+  #theme_hc() +
+  theme(legend.position = "bottom") +
+  labs(x = "Average Sales Price [$]", y = "", fill = "Department",
+       title = "Item Prices by Category & Department - stable over the years",
+       subtitle = "But see HOBBIES_2 becoming bimodal + average price increases")
+```
+
+We find:
+
+- Overall, the price distributions are pretty stable over the years, with only slight increases that are likely due to inflation. For this plot, I've left the standard grey backgrounds so that you can use the vertical grid lines to better see the shifts to the right (remember that the scale is logarithmic). This is probably best visible in HOBBIES_1.
+
+- An interesting evolution is visible in HOBBIES_2, which over time becomes much more bimodal: the second peak at $1 is increasing in importance until it almost reaches the level of the main peak just above 2 dollars. At the same time the small secondary peak at half a dollar in HOBBIES_1 becomes more flat after 2012.
+
+- The HOUSEHOLD departments are stable. FOODS shows small changes like the relative growth of the $1 peak of FOODS_1.
+
+
+## Connection to time series data
+
+Now that we have an idea about the properties of our explanatory variables, let's see how they could influence our time series data.
+
+Here, we're looking at time series properties on an aggregate level. I plan for the next section to contain views of selected individual time series.
+
+First off, this is a comprehensive view of sales volume during days with special events vs non-events for our 3 categories food, hobbies, and household. I'm showing the daily time series in the background, but it's more instructive to look at the smoothed representations. I'm doing the smoothing per category and also globally (dashed line). This global fit will be used to compute the relative sales for the two bottom panels. In the lower right panel I only look at days with events and show the median sales for the 4 different types of events. The two bottom panels share the same y-axis labels between them.
+
+Take your time to digest this view:
+
+```{r fig.cap ="Fig. 14", fig.height = 6}
+foo <- train %>%
+  group_by(cat_id) %>% 
+  summarise_at(vars(starts_with("d_")), sum) %>% 
+  rename(id = cat_id) %>% 
+  extract_ts() %>% 
+  rename(cat_id = id) %>% 
+  left_join(calendar %>% select(date, event_type_1), by = c("dates" = "date")) %>% 
+  filter(!str_detect(as.character(dates), "-12-25")) %>% 
+  group_by(cat_id) %>% 
+  mutate(loess = predict(loess(sales ~ as.integer(dates - min(dates)) + 1, span = 1/2, degree = 1)),
+         mean_sales = mean(sales)) %>% 
+  mutate(sales_rel = (sales - loess)/mean_sales) %>% 
+  mutate(is_event = !is.na(event_type_1)) %>% 
+  ungroup()
+
+
+p1 <- foo %>% 
+  ggplot(aes(dates, sales/1e3, group = is_event, col = is_event)) +
+  geom_line(aes(dates, loess/1e3), col = "black", linetype = 2) +
+  geom_line(alpha = 0.3) +
+  geom_smooth(method = "loess", formula = 'y ~ x', span = 2/3, se = FALSE) +
+  scale_colour_manual(values = c("grey70", "red")) +
+  facet_wrap(~ cat_id, scales = "free") +
+  theme_hc() +
+  theme(legend.position = "right") +
+  labs(x = "", y = "Sales [$1k]", col = "Event", title = "Sales per Category during special events vs non-events")
+
+p2 <- foo %>% 
+  ggplot(aes(cat_id, sales_rel, fill = is_event)) +
+  geom_boxplot() +
+  coord_flip() +
+  scale_fill_manual(values = c("grey70", "red")) +
+  theme_hc() +
+  theme(legend.position = "none", axis.text.y = element_blank(), axis.ticks.y = element_blank(),
+        axis.title.x = element_text(size = 10)) +
+  labs(x = "", y = "Relative Sales", fill = "event")
+
+p3 <- foo %>%
+  filter(is_event == TRUE) %>% 
+  group_by(cat_id, event_type_1) %>% 
+  summarise(sales = median(sales_rel)) %>% 
+  ggplot(aes(cat_id, sales, fill = event_type_1)) +
+  geom_col(position = "dodge") +
+  coord_flip() +
+  theme_hc() +
+  theme(legend.position = "right", axis.title.x = element_text(size = 10)) +
+  labs(x = "", y = "Median Relative Sales", fill = "Type")
+
+layout <- '
+AAAAAA
+AAAAAA
+AAAAAA
+BBBCCD
+BBBCCD
+'
+
+p1 + p2 + p3 + guide_area() + plot_layout(design = layout, guides = 'collect')
+```
+
+We find:
+
+- For FOODS the smoothed lines of event vs non-event sales are pretty similar, while for HOBBIES the red event line is consistently below the non-events and for HOUSEHOLD the same is true after 2013. (This is a curious detail, that before 2013 there was no real difference between those sales.)
+
+- This impression is confirmed by looking at the boxplots in the lower left panel, which show the relative sales after subtracting the global smoothing fit. The FOODS sales are pretty comparable between events and non-events, while the event sales for HOUSEHOLD and especially HOBBIES are notably below the non-event level.
+
+- In the lower right panel we break out the events by type and look at the medians of the relative sales. The first thing we see is that FOODS sales are notably higher during "Sporting" events. This makes sense, given the food culture associated with big events like the Superbowl. FOODs also have slightly positive net sales during "Cultural" events.
+
+- In general, "National" and "Religious" events both lead to relative decline in sales volume. "National" events are more depressing for the HOBBIES category, while the other two categories are slightly more affected by "Religious" events. HOBBIES also sees lower sales from "Cultural" events, while for FOODS and HOUSEHOLD the differences are smaller. "Sporting" has a minor impact on HOUSEHOLD and HOBBIES.
+
+
+We've spend quite a bit of time on designing this dashboard-like overview, so let's get some mileage out of it. Here's the equivalent plot for the 3 states:
+
+```{r fig.cap ="Fig. 15", fig.height = 6}
+foo <- train %>%
+  group_by(state_id) %>% 
+  summarise_at(vars(starts_with("d_")), sum) %>% 
+  rename(id = state_id) %>% 
+  extract_ts() %>% 
+  rename(state_id = id) %>% 
+  left_join(calendar %>% select(date, event_type_1), by = c("dates" = "date")) %>% 
+  filter(!str_detect(as.character(dates), "-12-25")) %>% 
+  group_by(state_id) %>% 
+  mutate(loess = predict(loess(sales ~ as.integer(dates - min(dates)) + 1, span = 1/2, degree = 1)),
+         mean_sales = mean(sales)) %>% 
+  mutate(sales_rel = (sales - loess)/mean_sales) %>% 
+  mutate(is_event = !is.na(event_type_1)) %>% 
+  ungroup()
+
+
+p1 <- foo %>% 
+  ggplot(aes(dates, sales/1e3, group = is_event, col = is_event)) +
+  geom_line(aes(dates, loess/1e3), col = "black", linetype = 2) +
+  geom_line(alpha = 0.3) +
+  geom_smooth(method = "loess", formula = 'y ~ x', span = 2/3, se = FALSE) +
+  scale_colour_manual(values = c("grey70", "red")) +
+  facet_wrap(~ state_id, scales = "free") +
+  theme_hc() +
+  theme(legend.position = "right") +
+  labs(x = "", y = "Sales [$1k]", col = "Event", title = "Sales per State during special events vs non-events")
+
+p2 <- foo %>% 
+  ggplot(aes(state_id, sales_rel, fill = is_event)) +
+  geom_boxplot() +
+  coord_flip() +
+  scale_fill_manual(values = c("grey70", "red")) +
+  theme_hc() +
+  theme(legend.position = "none", axis.text.y = element_blank(), axis.ticks.y = element_blank(),
+        axis.title.x = element_text(size = 10)) +
+  labs(x = "", y = "Relative Sales", fill = "event")
+
+p3 <- foo %>%
+  filter(is_event == TRUE) %>% 
+  group_by(state_id, event_type_1) %>% 
+  summarise(sales = median(sales_rel)) %>% 
+  ggplot(aes(state_id, sales, fill = event_type_1)) +
+  geom_col(position = "dodge") +
+  coord_flip() +
+  theme_hc() +
+  theme(legend.position = "right", axis.title.x = element_text(size = 10)) +
+  labs(x = "", y = "Median Relative Sales", fill = "Type")
+
+layout <- '
+AAAAAA
+AAAAAA
+AAAAAA
+BBBCCD
+BBBCCD
+'
+
+p1 + p2 + p3 + guide_area() + plot_layout(design = layout, guides = 'collect')
+```
+
+We find:
+
+- Special events slightly outsell non-event days in TX before 2014; afterwards they are similar. CA and WI also show a drop around the same time, but here it's from similar sales to lower sales. This seems to be a common pattern that starts in 2013.
+
+- As a result the events boxplot for WI is notably shifted toward lower values, while in TX events push the sales figures to somewhat higher values. CA is roughly the same for events vs non-events. Note, that this is the global picture which will be different pre- and post-2014..
+
+- The view of event types looks interesting, especially for WI where "National" events have a strong negative impact on sales numbers. WI is also the only state where "Cultural" events have lower sales numbers, especially compared to TX. In contrast, "Religious" events have the smallest, but still negative impact in WI. "Sporting" events have a positive influence in each state. 
+
+
+Now, for the states we also have the SNAP dates from Fig. 11. In this plot we show again a smoothed fit for the SNAP days vs other days in the top panel, but then add different plots in the lower panels. The lower left plot shows the daily sales percentages. Since SNAP days make up about 1/3 of the days in each month, we sum the sales for each group (SNAP vs non-SNAP) and then divide by the total number of days.
+
+
+```{r fig.cap ="Fig. 16", fig.height = 4.5}
+bar <- calendar %>% 
+  select(date, starts_with("snap")) %>% 
+  pivot_longer(starts_with("snap"), names_to = "state_id", values_to = "snap") %>% 
+  mutate(state_id = str_replace(state_id, "snap_", ""))
+
+foo <- train %>%
+  group_by(state_id) %>% 
+  summarise_at(vars(starts_with("d_")), sum) %>% 
+  rename(id = state_id) %>% 
+  extract_ts() %>% 
+  rename(state_id = id) %>% 
+  left_join(bar, by = c("dates" = "date", "state_id")) %>% 
+  filter(!str_detect(as.character(dates), "-12-25")) %>% 
+  mutate(snap = as.logical(snap)) %>% 
+  group_by(state_id) %>% 
+  mutate(loess = predict(loess(sales ~ as.integer(dates - min(dates)) + 1, span = 1/2, degree = 1)),
+         mean_sales = mean(sales)) %>% 
+  mutate(sales_rel = (sales - loess)/mean_sales) %>% 
+  ungroup()
+
+
+p1 <- foo %>% 
+  ggplot(aes(dates, sales/1e3, group = snap, col = snap)) +
+  geom_line(aes(dates, loess/1e3), col = "black", linetype = 2) +
+  geom_line(alpha = 0.3) +
+  geom_smooth(method = "loess", formula = 'y ~ x', span = 2/3, se = FALSE) +
+  scale_colour_manual(values = c("grey70", "red")) +
+  facet_wrap(~ state_id, scales = "free") +
+  theme_hc() +
+  theme(legend.position = "right") +
+  labs(x = "", y = "Sales [$1k]", col = "SNAP day", title = "Sales per State on SNAP days vs other")
+
+p2 <- foo %>% 
+  group_by(state_id, snap) %>% 
+  summarise(sales = sum(sales),
+            ct = n()) %>% 
+  mutate(sales_daily = sales/ct) %>% 
+  add_tally(sales_daily, name = "total") %>% 
+  mutate(perc = sales_daily/total) %>% 
+  ggplot(aes(state_id, perc, fill = snap)) +
+  geom_col(position = "dodge") +
+  geom_label(aes(label = sprintf("%.1f %%", perc*100), group = snap), position = position_dodge(width = 1)) +
+  scale_y_continuous(labels = scales::percent, breaks = c(0, seq(0.1, 0.5, 0.2))) +
+  coord_cartesian(ylim = c(0, 0.6)) +
+  scale_fill_manual(values = c("grey70", "red")) +
+  theme_hc() +
+  theme(legend.position = "none", axis.text.y = element_blank(), axis.ticks.y = element_blank()) +
+  labs(x = "", y = "", title = "Daily Sales Percentage")
+
+layout <- '
+AAAA
+AAAA
+BBBC
+'
+
+p1 + p2 + guide_area() + plot_layout(design = layout, guides = 'collect')
+```
+
+We find:
+
+- The SNAP days have clearly higher sales in every state. The largest difference to non-SNAP days is present for WI; this is abundantly clear from both the time series plots and the daily sales percentages. CA sales are closest for the two groups, but SNAP days are still almost 2 percentage points above 50%.
+
+- There are some slight variations over time, primarily for WI where the two curves appear to reach there biggest difference around 2013. As with all smoothing fits, also these ones have to be taken with a grain of salt near the very edges of the data.
+
+
+After looking at the last two visuals the question has to be: how does the sales `category` interact with the SNAP feature?
+
+The "N" in SNAP stands for "Nutrition", so we would naively expect that those benefits would primarily affect purchases in our FOODS category. However, keep in mind that once someone bases their shopping patterns on SNAP days, they are very likely to purchase other items while they are there.
+
+Let's see what the data shows. Since the SNAP days are state dependent, we have to join our data by state level (and date) first, before aggregating by category and SNAP. We first look at the daily sales percentage for SNAP vs other, and then plot a heatmap for weekday vs month. The values of the heatmap show the differences between the sum of relative sales on SNAP days minus the sum of relative sales on other days. If the numbers are positive then there are more sales on SNAP days for this weekday and month (normalised by overall volume):
+
+```{r fig.cap ="Fig. 17", fig.height = 7.5}
+min_date <- min(calendar$date)
+
+bar <- calendar %>% 
+  select(date, starts_with("snap")) %>% 
+  pivot_longer(starts_with("snap"), names_to = "state_id", values_to = "snap") %>% 
+  mutate(state_id = str_replace(state_id, "snap_", ""))
+
+foo <- train %>%
+  group_by(state_id, cat_id) %>% 
+  summarise_at(vars(starts_with("d_")), sum) %>% 
+  pivot_longer(starts_with("d_"), names_to = "dates", values_to = "sales") %>%
+  mutate(dates = as.integer(str_remove(dates, "d_"))) %>% 
+  mutate(dates = min_date + dates - 1) %>% 
+  left_join(bar, by = c("dates" = "date", "state_id")) %>%  
+  filter(!str_detect(as.character(dates), "-12-25")) %>% 
+  mutate(snap = as.logical(snap)) %>% 
+  group_by(state_id, cat_id) %>% 
+  mutate(loess = predict(loess(sales ~ as.integer(dates - min(dates)) + 1, span = 1/2, degree = 1)),
+         mean_sales = mean(sales)) %>% 
+  mutate(sales_rel = (sales - loess)/mean_sales) %>% 
+  ungroup()
+
+# foo %>% 
+#   filter(cat_id == "HOBBIES") %>% 
+#   ggplot(aes(dates, sales/1e3, group = snap, col = snap)) +
+#   geom_line(aes(dates, loess/1e3), col = "black", linetype = 2) +
+#   geom_line(alpha = 0.3) +
+#   geom_smooth(method = "loess", formula = 'y ~ x', span = 2/3, se = FALSE) +
+#   scale_colour_manual(values = c("grey70", "red")) +
+#   facet_wrap(~ state_id, scales = "free") +
+#   theme_hc() +
+#   theme(legend.position = "right") +
+#   labs(x = "", y = "Sales [$1k]", col = "SNAP day", title = "Sales per State on SNAP days vs other")
+
+
+p1 <- foo %>% 
+  group_by(state_id, cat_id, snap) %>% 
+  summarise(sales = sum(sales),
+            ct = n()) %>% 
+  mutate(sales_daily = sales/ct) %>% 
+  add_tally(sales_daily, name = "total") %>% 
+  mutate(perc = sales_daily/total) %>% 
+  ggplot(aes(cat_id, perc, fill = snap)) +
+  geom_col(position = "dodge") +
+  facet_wrap(~ state_id, nrow = 1) +
+  #geom_label(aes(label = sprintf("%.1f %%", perc*100), group = snap), position = position_dodge(width = 1)) +
+  scale_y_continuous(labels = scales::percent, breaks = c(0, seq(0.1, 0.5, 0.2))) +
+  coord_cartesian(ylim = c(0, 0.6)) +
+  scale_fill_manual(values = c("grey70", "red")) +
+  theme_hc() +
+  theme(legend.position = "none", axis.text.x = element_text(size = 8)) + 
+  labs(x = "", y = "", title = "Daily Sales Percentage for SNAP per category")
+  
+p2 <- foo %>% 
+  filter(state_id == "CA" & cat_id == "FOODS") %>% 
+    mutate(wday = wday(dates, label = TRUE, week_start = 1),
+         month = month(dates, label = TRUE),
+         year = year(dates)) %>% 
+  group_by(wday, month, snap) %>% 
+  summarise(sales = sum(sales_rel)) %>% 
+  pivot_wider(names_from = "snap", values_from = "sales", names_prefix = "snap") %>% 
+  mutate(snap_effect = snapTRUE - snapFALSE) %>% 
+  ggplot(aes(month, wday, fill = snap_effect)) +
+  geom_tile() +
+  labs(x = "Month of the year", y = "Day of the week", fill = "SNAP effect") +
+  scale_fill_distiller(palette = "Spectral") +
+  theme_hc() +
+  theme(legend.position = "bottom") +
+  labs(x = "", y = "", title = "SNAP impact by weekday & month",
+       subtitle = "Relative sales of SNAP days - other days. Only FOODS category and state CA.")
+
+p1 / p2
+```
+
+We find:
+
+- As expected, the impact is largest for the FOODs category; especially in WI. However, there are indications of slight synergy effects on other categories as well.
+
+- The heatmap focusses on FOODS and CA (because CA has the overall largest sales numbers). We see that overall the work days Mon-Fri show stronger benefits from SNAP purchases than the weekend Sat/Sun.
+
+- Thursdays in November stand out. I suspect that this effect is because of SNAP, but because of [Thanksgiving](https://en.wikipedia.org/wiki/Thanksgiving). Thanksgiving is celebrated on the 4th Thursday in November every year. Here, this holiday most likely cuts into the "other" purchases and leads to the SNAP effect appearing artificially high.
+
+- Which reminds us that one caveat we have to keep in mind here is that SNAP days are always during the first half of each month. Ideally, we would want to control for the possibility that the effect we see is 1st half of month vs 2nd half of month rather than SNAP vs other. Or the possibility that we see the impact of holidays like Thanksgiving instead.
+
+
+# Individual time series with explanatory variables
+
+Now that we know the global impact of the explanatory variables, let's look at some example time series to get an idea about individual effects.
+
+We will pick 3 random items from our interactive Fig. 2. Then we extract their sales numbers and join calendar events together with SNAP flags. I've spent some thoughts on how to display this in an efficient way, and here is my current preferred strategy: we plot the sales numbers as line charts on top of background rectangles that show the (regular) periods of SNAP days. Then we add event indicators as black points. Let me know if you have any other suggestions on how to plot this more elegantly.
+
+
+```{r}
+example_ids <- str_c(c("FOODS_2_092_CA_1", "HOUSEHOLD_2_071_TX_2", "HOBBIES_1_348_WI_3"), "_validation")
+
+example_sales <- train %>% 
+  filter(id %in% example_ids) %>%  
+  extract_ts() %>% 
+  mutate(state_id = str_sub(id, -4, -3))
+
+example_prices <- prices %>% 
+  unite("id", item_id, store_id, sep = "_") %>% 
+  filter(id %in% str_remove(example_ids, "_validation"))
+
+example_calendar <- calendar %>% 
+  select(date, wm_yr_wk, event_name_1, starts_with("snap")) %>% 
+  pivot_longer(starts_with("snap"), names_to = "state_id", values_to = "snap") %>% 
+  mutate(state_id = str_replace(state_id, "snap_", "")) %>% 
+  rename(event = event_name_1)
+
+example <- example_sales %>% 
+  left_join(example_calendar, by = c("dates" = "date", "state_id")) %>% 
+  left_join(example_prices, by = c("id", "wm_yr_wk")) %>% 
+  mutate(snap = as.factor(if_else(snap == 1, "SNAP", "Other")))
+```
+
+```{r}
+# start and end times for SNAP intervals
+snap_intervals <- example %>%
+  group_by(state_id) %>% 
+  mutate(foo = lead(snap, 1),
+         bar = lag(snap, 1)) %>% 
+  mutate(snap_start = if_else(snap == "SNAP" & bar == "Other", dates, date(NA_character_)),
+         snap_end = if_else(snap == "SNAP" & foo == "Other", dates, date(NA_character_))) %>% 
+  ungroup()
+
+snap_intervals <- snap_intervals %>% 
+  select(state_id, snap_start) %>% 
+  filter(!is.na(snap_start)) %>% 
+  bind_cols(snap_intervals %>% 
+    select(snap_end) %>% 
+    filter(!is.na(snap_end)))
+```
+
+
+To keep the focus on the SNAP periods, this plot will zoom into the period of May - Sep 2015. The three different items cover the 3 states and 3 sales categories. Following Fig. 11 we know that different states have different SNAP days; with only CA having a continuous 10-day range in our data:
+
+```{r fig.cap ="Fig. 18", fig.height = 6}
+example %>% 
+  filter(between(dates, date("2015-05-01"), date("2015-10-01"))) %>% 
+  mutate(has_event = if_else(str_length(event) > 0, sales, NA_real_)) %>% 
+  left_join(snap_intervals, by = c("state_id", "dates" = "snap_start")) %>% 
+  mutate(snap_start = if_else(is.na(snap_end), date(NA_character_), dates)) %>% 
+  ggplot(aes(dates, sales, group = id)) +
+  geom_rect(aes(xmin = snap_start, xmax = snap_end, ymin = -Inf, ymax = Inf), fill = "grey90", na.rm = TRUE) +
+  geom_line(aes(col = id), na.rm = TRUE) +
+  geom_point(aes(dates, has_event), na.rm = TRUE) +
+  # coord_cartesian(xlim = c(date("2015-05-01"), date("2015-10-01"))) + 
+  facet_wrap(~id, nrow = 3, scales = "free") +
+  theme_hc() +
+  theme(legend.position = "none") +
+  labs(x = "", y = "Sales", title = "Sales for 3 random items in mid 2015 with calendar events",
+       subtitle = "Grey background = SNAP dates. Black points = Events. Note the different y-axis ranges.")
+```
+
+We find:
+
+- For the FOOD item, the sales patterns are consistent with more purchases during SNAP periods; as we had seen in Fig. 17. This is of course no proof of this effect. Rather we have an example of how those patterns can manifest themselves. For HOBBIES and HOUSEHOLD items there are no immediate indications that SNAP days provide a particular sales boost.
+
+- We've seen in Fig. 15 that the impact of events is more complex. For simplicity we don't distinguish between different types of events in this plot. We see that sometimes there are sales spikes on the day of the event (e.g. FOOOS for early Jun), while other times those spikes occur prior to an event (HOBBIES late May) or thereafter (FOODS after Jul 4th). Other combinations of events and categories appear to show no particular impact either way.
+
+
+We can look a price changes in a similar way. Here, I'm first extracting the intervals of constant prices by identifying the change points.
+
+```{r}
+# start and end times for price changes
+price_intervals <- example %>% 
+  group_by(id) %>% 
+  mutate(foo = lead(sell_price, 1)) %>% 
+  filter((sell_price != foo) | (is.na(foo) & !is.na(sell_price)) ) %>% 
+  select(id, dates, sell_price) %>% 
+  mutate(price_start = lag(dates, 1)) %>% 
+  replace_na(list(price_start = min(example$dates))) %>% 
+  rename(price_end = dates)
+```
+
+
+Then I'll join the those intervals, and their price numbers, to the sales information for our 3 example items. Since price changes happen over a longer time range, here we will look at the entire training data time range, not just focus on a few months as above. The visualisation is another experiment in which I encode the price as a background colour behind the time series. The idea is to be able to identify changes in price, whether it's an increase or a decrease, with changes in sales numbers.
+
+In the following plots, lighter colours mean lower prices. Note the different price ranges for each item:
+
+
+```{r fig.cap ="Fig. 19", fig.height = 6}
+p1 <- example %>% 
+  filter(id == "FOODS_2_092_CA_1") %>% 
+  select(id, dates, sales) %>% 
+  left_join(price_intervals, by = c("id", "dates" = "price_start")) %>% 
+  mutate(price_start = if_else(is.na(price_end), date(NA_character_), dates)) %>% 
+  ggplot(aes(dates, sales, group = id)) +
+  geom_rect(aes(xmin = price_start, xmax = price_end, ymin = 0, ymax = Inf, fill = sell_price), na.rm = TRUE) +
+  #geom_line(col = scales::hue_pal()(3)[1], na.rm = TRUE) +
+  geom_line(col = "grey30", na.rm = TRUE) +
+  #scale_colour_hue(guide = FALSE) +
+  #scale_fill_gradient(low = "grey90", high = "grey70") +
+  scale_fill_viridis_c(begin = 1, end = 0.4, alpha = 0.7) +
+  theme_hc() +
+  theme(legend.position = "right") +
+  labs(x = "", y = "Sales", fill = "Price [$]", title = "FOODS_2_092_CA_1")
+
+p2 <- example %>% 
+  filter(id == "HOUSEHOLD_2_071_TX_2") %>% 
+  select(id, dates, sales) %>% 
+  left_join(price_intervals, by = c("id", "dates" = "price_start")) %>% 
+  mutate(price_start = if_else(is.na(price_end), date(NA_character_), dates)) %>% 
+  ggplot(aes(dates, sales, group = id)) +
+  geom_rect(aes(xmin = price_start, xmax = price_end, ymin = 0, ymax = Inf, fill = sell_price), na.rm = TRUE) +
+  # geom_line(col = scales::hue_pal()(3)[2], na.rm = TRUE) +
+  geom_line(col = "grey30", na.rm = TRUE) +
+  #scale_colour_hue(guide = FALSE) +
+  # scale_fill_gradient(low = "grey90", high = "grey70") +
+  scale_fill_viridis_c(begin = 1, end = 0.4, alpha = 0.7) +
+  theme_hc() +
+  theme(legend.position = "right") +
+  labs(x = "", y = "Sales", fill = "Price [$]", title = "HOUSEHOLD_2_071_TX_2")
+
+p3 <- example %>% 
+  filter(id == "HOBBIES_1_348_WI_3") %>% 
+  select(id, dates, sales) %>% 
+  left_join(price_intervals, by = c("id", "dates" = "price_start")) %>% 
+  mutate(price_start = if_else(is.na(price_end), date(NA_character_), dates)) %>% 
+  ggplot(aes(dates, sales, group = id)) +
+  geom_rect(aes(xmin = price_start, xmax = price_end, ymin = 0, ymax = Inf, fill = sell_price), na.rm = TRUE) +
+  # geom_line(col = scales::hue_pal()(3)[3], na.rm = TRUE) +
+  geom_line(col = "grey30", na.rm = TRUE) +
+  #scale_colour_hue(guide = FALSE) +
+  # scale_fill_gradient(low = "grey90", high = "grey70") +
+  scale_fill_viridis_c(begin = 1, end = 0.4, alpha = 0.7) +
+  theme_hc() +
+  theme(legend.position = "right") +
+  labs(x = "", y = "Sales", fill = "Price [$]", title = "HOBBIES_1_348_WI_3")
+
+p1 / p2 / p3 + plot_annotation(title = 'Price changes for 3 random items over full training period',
+                               subtitle = "Line charts = sales curves. Background colour = sell price. Lighter colours = lower prices")
+```
+
+We find:
+
+- Some items have more frequent price changes than others. The anonymous FOODS product changes price about 10 times, whereas the HOUSEHOLD item only has one short period of lower price and then goes back to its original price.
+
+- The main takeaway here is that in some cases price changes are correlated with demand picking up after a noticeable gap of zero sales. Case in point: the FOODS item sales around 2013 and the HOBBIES product sales at a similar time. In both cases, the price changing during a gap coincides with the an increase in sales that lasts for a certain amount of time (rather than just 1 or 2 days). Note, though, that our data tells us nothing about whether those price changes were accompanied by increased advertising efforts, which might have more impact than the prices themselves.
+
+- In terms of the FOODS and HOBBIES items we also see some evidence during the early parts of the time series that lower prices coincide with somewhat higher sales numbers. Keep in mind that these are simply some example time series at this point.
+
+
+Alright, let's try to put everything together in another interactive plot: This one is essentially the setup of Fig. 18 for the entire training time range, with the prices from Fig. 19 overlayed as thick orange lines. The `plotly` tools allow you to zoom and pan each panel individually. In this way, you can explore each time series in different time ranges and resolutions.
+
+Here, the vertical grey background stripes indicate SNAP dates. The black points are events, like in Fig. 18. The thick orange line shows sell prices scaled to relative values that display well in the y-axis range of the sales numbers.
+
+
+```{r  fig.cap ="Fig. 20", fig.height = 7}
+gg <- example %>% 
+  #filter(between(dates, date("2015-05-01"), date("2015-10-01"))) %>% 
+  mutate(has_event = if_else(str_length(event) > 0, sales, NA_real_)) %>% 
+  group_by(id) %>% 
+  mutate(max_sales = max(sales, na.rm = TRUE),
+         min_price = min(sell_price, na.rm = TRUE),
+         max_price = max(sell_price, na.rm = TRUE)) %>% 
+  ungroup() %>% 
+  mutate(rel_price = (sell_price - min_price)/(max_price - min_price) * max_sales * 0.6 + max_sales*0.4) %>% 
+  left_join(snap_intervals, by = c("state_id", "dates" = "snap_start")) %>% 
+  mutate(snap_start = if_else(is.na(snap_end), date(NA_character_), dates)) %>% 
+  ggplot(aes(dates, sales, group = id)) +
+  geom_rect(aes(xmin = snap_start, xmax = snap_end, ymin = 0, ymax = max_sales), fill = "grey90", na.rm = TRUE) +
+  geom_line(aes(col = id), na.rm = TRUE) +
+  geom_line(aes(dates, rel_price), col = "orange", size = 3, alpha = 0.3, na.rm = TRUE) +
+  geom_point(aes(dates, has_event), na.rm = TRUE) +
+  # coord_cartesian(xlim = c(date("2015-05-01"), date("2015-10-01"))) + 
+  facet_wrap(~id, nrow = 3, scales = "free") +
+  theme_hc() +
+  theme(legend.position = "none", strip.background = element_blank(), strip.text = element_text(size = 10),
+        panel.spacing = unit(1, "lines"), plot.title = element_text(size = 10)) +
+  labs(x = "", y = "Sales", title = "Interactive Sales + Explanatory Features\nGrey = SNAP. Black = Events. Orange = Scaled Price.")
+
+ggplotly(gg, dynamicTicks = TRUE)
+```
+
+Those are only 3 example items, so feel free to take this code and use it to explore other time series that you are interested in or that might be causing issues in your models. I'd be curious to know of any specific examples for which you find odd or unexpected patterns.
+
+
+# Summary statistics
+
+Let's make a big jump from the detailed view of individual time series to a collection of overview statistics. Here we attempt to parametrise a sample of time series via a comprehensive set of fundamental parameters.
+
+For the sake of keeping this analysis nimble we will only look at a random 5,000 time series. We can see that the statistics are reasonably representative by comparing the distribution of zero sales to the corresponding full distribution in Fig. 1 (Section 3.4).
+
+```{r}
+set.seed(4321)
+stat_train <- train %>% 
+  sample_n(5e3) %>% 
+  select(id, starts_with("d_")) %>% 
+  mutate(id = str_replace(id, "_validation", ""))
+```
+
+
+```{r}
+stat_mean <- stat_train %>% 
+  na_if(0) %>% 
+  mutate(mean = select(., starts_with("d_")) %>% pmap_dbl(~mean(c(...), na.rm = TRUE))) %>% 
+  select(id, mean)
+
+stat_zero <- stat_train %>% 
+  select(-contains("id")) %>% 
+  na_if(0) %>% 
+  is.na() %>% 
+  as_tibble() %>% 
+  mutate(sum = pmap_dbl(select(., everything()), sum)) %>% 
+  mutate(mean = sum/(ncol(stat_train) - 1)) %>% 
+  select(sum, mean)
+  
+stat_prices <- prices %>% 
+  unite(col = "id", item_id, store_id, sep  = "_") %>%
+  semi_join(stat_train, by = "id")
+```
+
+```{r fig.cap ="Fig. 21", fig.height = 5}
+p1 <- stat_zero %>% 
+  ggplot(aes(mean)) +
+  geom_density(fill = "blue", bw = 0.02) +
+  scale_x_continuous(labels = scales::percent) +
+  coord_cartesian(xlim = c(0, 1)) +
+  theme_hc() +
+  theme(axis.text.y = element_blank()) +
+  labs(x = "", y = "", title = "Density: Percentage of zero values")
+
+p2 <- stat_mean %>% 
+  ggplot(aes(mean)) +
+  geom_density(fill = "red", bw = 0.03) +
+  scale_x_log10(breaks = c(1, 2, 5, 10, 20)) +
+  theme_hc() +
+  theme(axis.text.y = element_blank()) +
+  labs(x = "Sales", y = "", title = "Density: Mean sales (w/o zeros; log scale)")
+
+foo <- stat_prices %>% 
+  distinct(id, sell_price) %>% 
+  group_by(id) %>% 
+  summarise(mean_price = mean(sell_price),
+            min_price = min(sell_price),
+            max_price = max(sell_price)) %>%
+  mutate(var_price = (max_price - min_price)/ mean_price)
+
+p3 <- foo %>% 
+  ggplot(aes(mean_price)) +
+  geom_density(fill = "darkgreen")  +
+  theme_hc() +
+  theme(axis.text.y = element_blank(), legend.position = "none") +
+  labs(x = "Price [$]", y = "", title = "Density: Mean item price")
+
+p4 <- foo %>% 
+  ggplot(aes(var_price)) +
+  geom_density(fill = "green3")  +
+  scale_x_continuous(labels = scales::percent) +
+  coord_cartesian(xlim = c(0, 1)) +
+  theme_hc() +
+  theme(axis.text.y = element_blank(), legend.position = "none") +
+  labs(x = "", y = "", title = "Density: Normalised price variations")
+
+
+(p1 + p2) / (p3 + p4)
+```
+
+We find:
+
+- We briefly mentioned the high number of zero values at the beginning of this Notebook. It's certainly worth reminding ourselves that only a small fraction of time series have less than 25% zeros; and that that even having less than 50% zeros is not overly common.
+
+- Once we remove the zeros, the mean number of daily sales is rather low: between 1 and 2 units. However, there is a small fraction that has mean sales numbers above 5 units, or even above 10. This illustrates the overall low-count nature of our individual time series.
+
+- The price statistics are shown in shades of green: The mean item price is chiefly between 0-10 dollars; peaking around 2 or 3 dollars. As we have seen above, prices depend very much on category.
+
+- In light green we see a visualisation of the price variability in our items. Displayed here is the difference between maximum and minimum price, divided by the mean price. Most prices don't vary much: less than 25% of their mean value. I cut off the x-axis at 100%, to focus on the interesting part, but we also see a few rare instances exceeding 200%.
+
+
+Let's spend a bit more time on the zeros sales. Far from being an unimportant feature, these instances can tell us quite a lot about the properties of our time series. Here we break it down by year and look at the percentage of zeros (same as the plot above) and the year of the first non-zero instance:
+
+
+```{r fig.cap ="Fig. 22", fig.height = 3}
+foo <- stat_train %>% 
+  extract_ts() %>% 
+  na_if(0) %>% 
+  mutate(sales = is.na(sales)) %>% 
+  mutate(year = year(dates)) %>% 
+  group_by(year, id) %>% 
+  summarise(mean  = mean(sales)) %>% 
+  ungroup()
+
+bar <- stat_train %>% 
+  extract_ts() %>% 
+  filter(sales > 0) %>% 
+  group_by(id) %>% 
+  summarise(min_year = year(min(dates)))
+
+p1 <- foo %>% 
+  ggplot(aes(mean, as.factor(year))) +
+  geom_density_ridges(alpha = 0.5, bandwidth = 0.08, fill = "blue") +
+  scale_x_continuous(labels = scales::percent) +
+  theme_hc() +
+  theme(legend.position = "none") +
+  labs(x = "", y = "", title = "Percentage of zeros per year")
+
+p2 <- bar %>% 
+  group_by(min_year) %>% 
+  summarise(n = n()) %>%
+  add_tally(n, name = "total") %>% 
+  mutate(perc = n/total) %>% 
+  mutate(is2011 = min_year == 2011) %>% 
+  ggplot(aes(as.factor(min_year), n, fill = is2011)) +
+  geom_col() +
+  geom_text(aes(label = sprintf("%.1f%%", perc*100)), nudge_y = 110) +
+  scale_fill_manual(values = c("grey70", "red")) +
+  theme_hc() +
+  theme(legend.position = "none") +
+  labs(x = "", y = "", title = "Year of first non-zero sale")
+
+p1 + p2
+```
+
+We find:
+
+- The percentage of zero values per year is significantly different for the first two years, 2011 and 2012, than for the remaining ones. This indicates that a notable number of time series only really start in 2013.
+
+- This impression is confirmed by looking at the year of the first non-zero entry: while 2011 has by the single largest chunk of non-zero entries, it accounts for just above 50% of all of them. 2012 and 2013 together make up about 30% of all time series starting points. There's only 2 time series in our 5k sample that start in 2016.
+
+
+A similar analysis can be done for the months of the year. Here our focus is slightly different: instead of looking at the starting year to determine how (in)complete a time series is, we now study which months show the lowest vs highest sales activities.
+
+
+```{r}
+foo <- stat_train %>% 
+  extract_ts() %>% 
+  na_if(0) %>% 
+  mutate(sales = is.na(sales)) %>% 
+  mutate(month = month(dates, label = TRUE, abbr = TRUE)) %>% 
+  group_by(month, id) %>% 
+  summarise(mean  = mean(sales)) %>% 
+  ungroup()
+
+bar <- stat_train %>% 
+  extract_ts() %>% 
+  filter(sales > 0) %>% 
+  group_by(id) %>% 
+  summarise(min_month = month(min(dates), label = TRUE, abbr = TRUE))
+```
+
+```{r fig.cap ="Fig. 23", fig.height = 4.5}
+ p1 <- foo %>% 
+  ggplot(aes(mean, fct_rev(as.factor((month))))) +
+  geom_density_ridges(alpha = 0.5, bandwidth = 0.04, fill = "blue") +
+  scale_x_continuous(labels = scales::percent) +
+  theme_tufte() +
+  theme(legend.position = "none") +
+  labs(x = "", y = "", title = "Percentage of zeros per month")
+
+p2 <- bar %>% 
+  group_by(min_month) %>% 
+  summarise(n = n()) %>%
+  add_tally(n, name = "total") %>% 
+  mutate(perc = n/total) %>% 
+  ggplot(aes(fct_rev(as.factor(min_month)), n)) +
+  geom_col(fill = "blue") +
+  coord_flip(ylim = c(0, 2200)) +
+  geom_text(aes(label = sprintf("%.1f%%", perc*100)), nudge_y = 50, hjust = "left") +
+  #scale_fill_manual(values = c("grey70", "red")) +
+  theme_tufte() +
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank()) +
+  labs(x = "", y = "", title = "Month of first non-zero sale")
+
+layout <- '
+ABB
+'
+
+p1 + p2 + plot_layout(design = layout)
+```
+
+We find:
+
+- There's no month that really stands out in terms of zero percentage. Certainly worth a look, though.
+
+- The right-side panel showing the month of the first non-zero entry is far more interesting. Remember that our data starts on 2011-01-29: there are only 3 days in our first year when a time series could have its first non-zero entry. And we also know that only 55% of time series have their first entry in 2011 in the first place.
+
+
+This calls for a heatmap to clear up the picture:
+
+```{r}
+foobar <- stat_train %>% 
+  extract_ts() %>% 
+  filter(sales > 0) %>% 
+  group_by(id) %>% 
+  summarise(min_month = month(min(dates), label = TRUE, abbr = TRUE),
+            min_year = year(min(dates)))
+```
+
+
+```{r fig.cap ="Fig. 24", fig.height = 3}
+foobar %>% 
+  count(min_month, min_year) %>% 
+  ggplot(aes(min_month, min_year, fill = n)) +
+  geom_tile() +
+  scale_y_reverse() +
+  scale_fill_distiller(palette = "Spectral", trans = "log10") +
+  theme_tufte() +
+  theme(legend.position = "bottom") +
+  labs(x = "", y = "", fill = "# First Non-Zero Entries", title = "Effective start of sample time series",
+       subtitle = "Counting the Year & Month of the first non-zero sales entry. Colour scale is logarithmic.")
+```
+
+We find:
+
+- The single most common effective starting month for our sample data is indeed Jan 2011; despite only having 3 days in our data.
+
+- We can also see that May and Jul have a certain edge over Jun in 2012 - 2015. This is consistent with Fig. 23 above. Since we will ultimately predict sales in Jun 2016 (see Fig. 9) this is an interesting insight to ponder.
+
+- Similarly, Dec is elevated over Nov, but this is likely due to Holiday sales.
+
+
+We can turn this question on its head, of course, and look at it from the perspective of last effective dates. A "Heads or Tails" view, if you like ;-)
+
+Practically, this means simply looking for the maximum non-zero year/month instead of the minimum one. Everything else stays the same. Now I also add some numbers on top of the tile colours to 
+
+```{r}
+foobar <- stat_train %>% 
+  extract_ts() %>% 
+  filter(sales > 0) %>% 
+  group_by(id) %>% 
+  summarise(max_month = month(max(dates), label = TRUE, abbr = TRUE),
+            max_year = year(max(dates)))
+```
+
+
+```{r fig.cap ="Fig. 25", fig.height = 3}
+foobar %>% 
+  count(max_month, max_year) %>% 
+  ggplot(aes(max_month, max_year, fill = n)) +
+  geom_tile() +
+  geom_text(aes(label = n)) +
+  scale_y_reverse() +
+  scale_fill_distiller(palette = "Spectral", trans = "log10") +
+  theme_tufte() +
+  theme(legend.position = "bottom") +
+  labs(x = "", y = "", fill = "# First Non-Zero Entries", title = "Effective end of sample time series",
+       subtitle = "Counting the Year & Month of the last non-zero training sales entry. Colour scale is logarithmic.")
+```
+
+We find:
+
+- The vast majority of time series extend to Apr 2016, which is reassuring. However, there are also about 250 instances (i.e. 5% of 5k) that have end dates before April. This doesn't have to mean that these items have no sales in May or June, but it does affect the forecasts.
+
+- The total number of time series without sales in 2016 is small, but they exist.
+
+
+Finally, let's have a look at price changes. In Fig. 21 we visualised the magnitude of price variations, here we'll compare their frequency and direction.
+
+First, we will look at the number of price changes per category. This counts the number of times an item changed its price, and then plots the distribution over our three categories FOODS, HOBBIES, and HOUSEHOLD. Then, we study the direction of these price changes: we count how often the price increased and plot this number as a percentage of the total price changed. A price increase percentage below 50% indicates that there were more price drops and rises.
+
+To display the price increase percentages we choose violin plots, which give us the global quartile measures while also preserving the shape of the distribution. Note, that since many items only changed price a few times, the underlying data is somewhat discrete; but the violin densities do a pretty good job at visualising differences in distribution shapes. We compare price increase percentages by category and by state:
+
+```{r fig.cap ="Fig. 26", fig.height = 5}
+foo <- stat_prices %>% 
+  distinct(id, sell_price) %>% 
+  group_by(id) %>% 
+  summarise(mean_price = mean(sell_price),
+            min_price = min(sell_price),
+            max_price = max(sell_price),
+            ct = n()) %>%
+  mutate(var_price = (max_price - min_price)/ mean_price) %>% 
+  separate(id, into = c("cat", "dept", "item", "state", "store"), sep = "_")
+
+bar <- stat_prices %>% 
+  distinct(id, sell_price) %>% 
+  group_by(id) %>% 
+  mutate(rise = (lead(sell_price, 1) - sell_price) > 0) %>% 
+  filter(!is.na(rise)) %>% 
+  summarise(rise_frac = mean(rise)) %>% 
+  separate(id, into = c("cat", "a", "b", "state", "c"), sep = "_") %>% 
+  select(-a, -b, -c)
+
+
+p1 <- foo %>% 
+  ggplot(aes(ct, group = cat, fill = cat)) +
+#  geom_boxplot() +
+#  geom_jitter(height = 0.1) +
+  scale_x_log10(breaks = c(1, 2, 5, 10, 20)) +
+  geom_density(bw = 0.2, alpha = 0.5) +
+  theme_hc() +
+  theme(legend.position = "bottom") +
+  labs(x = "", y = "", fill = "", title = "# Price changes by Category")
+
+p2 <- bar %>% 
+  ggplot(aes(cat, rise_frac, fill = cat)) +
+  geom_violin(draw_quantiles = c(0.25, 0.5, 0.75), bw = 0.1) +
+  scale_y_continuous(labels = scales::percent) +
+  theme_hc() +
+  theme(legend.position = "none") +
+  labs(x = "", y = "", fill = "", title = "% price increases by Category",
+       subtitle = "Violin density plot with quartiles")
+
+p3 <- bar %>% 
+  mutate(is_tx = state == "TX") %>% 
+  ggplot(aes(state, rise_frac, fill = is_tx)) +
+  geom_violin(draw_quantiles = c(0.25, 0.5, 0.75), bw = 0.1) +
+  scale_y_continuous(labels = scales::percent) +
+  scale_fill_manual(values = c("grey70", "red")) +
+  theme_hc() +
+  theme(legend.position = "none") +
+  labs(x = "", y = "", fill = "", title = "% price increases by State",
+       subtitle = "TX is more balanced than CA/WI")
+
+layout <- "
+AB
+AB
+AB
+AC
+DC
+"
+
+p1 + p3 + p2 + guide_area() + plot_layout(design = layout, guides = "collect")
+```
+
+We find:
+
+- FOODS items are seeing more frequent price changes. Overall, more than 10 price changes per item are rare.
+
+- The FOODS category items are also more likely to increase in price over time, while HOUSEHOLD items show price drops slightly more often. The HOBBIES category is pretty balanced between items become more or less expensive.
+
+- Between the three states, only TX shows a balanced distribution between price rises and drops. Both CA and WI are slightly more skewed towards prices increasing over time.
+
+- Seeing that our data covers multiple years, and inflation being a thing, I would have expected prices to increase globally over time. The fact that the data shows something different is certainly notable.
+
+
+# One more thing: External Dataset of Natural Disasters
+
+In this bonus section I want to demonstrate how to include external datasets in our analysis. This competition permits external data (not all competitions do) under the condition that all such sources are listed in [this summary thread](https://www.kaggle.com/c/m5-forecasting-accuracy/discussion/133468).
+
+I'm contributing a dataset of natural disaster declarations in the US, which I pre-processed after downloading from the website of the Federal Emergency Management Agency ([FEMA](https://www.fema.gov/)). The dataset is [available on Kaggle](https://www.kaggle.com/headsortails/us-natural-disaster-declarations). If you decide to use it, please consider upvoting the dataset.
+
+The full FEMA dataset goes back to 1953 and also contains information about recent biological emergency declarations - aka COVID-19. This information may be interesting for COVID-19 models. In addition, however, I also provide the file `fema_disasters_m5.csv`, which I prepared specifically for this competition by restricting the content to our three states CA, TX, & WI as well as excluding any events outside the time window visualised in Fig. 9.
+
+
+```{r echo=FALSE}
+if (dir.exists("/kaggle")){
+  path_fema <- "/kaggle/input/us-natural-disaster-declarations/"
+} else {
+  path_fema <- "../datasets/fema_disasters/"
+}
+```
+
+
+We load the M5-specific disaster data from the dataset location:
+
+```{r}
+us_disasters <- vroom(str_c(path_fema, "us_disasters_m5.csv"), col_types = cols())
+```
+
+
+Those are the features:
+
+```{r}
+us_disasters %>%
+  glimpse()
+```
+
+In essence:
+
+- The `disaster_number` is sequential catalogue number; and the `state` is one of "CA", "TX", "WI". The `declaration_type` is one of "DR" (= major disaster), "EM" (= emergency management), or "FM" (= "fire management"). Don't ask me why "major disaster" is abbreviated to "DR".
+
+- The columns `fips` and `designated_area` are included to provide a little more context and distinguishing power (beyond the `disaster_number`) for declarations in the same state that overlap in time. Our M5 data does not have geospatial resolution beyond the state level.
+
+- `incident_type` and `declaration_title` show what kind of disaster this is (e.g. "Fire") and which name it has been give (e.g. "Gage Holland Fire").
+
+- The four features ending in `_program_declared` indicate a flag whether certain aid programs were triggered or not (1/0) for this disaster.
+
+- The datetime features `declaration_date`, `incident_begin_date`, and `incident_end_date` are pretty self-explanatory. The dates of the beginning of the incident and of the declaration of the disaster can be quite different.
+
+More information can be found in the [dataset description](https://www.kaggle.com/headsortails/us-natural-disaster-declarations).
+
+
+There are a few instances in which no `incident_end_date` is known. For those, here we assume a very conservative duration of 1 day by setting the end date to the begin date. You could try out other, more sophisticated methods of imputing those missing values.
+
+```{r}
+us_disasters <- us_disasters %>%
+ mutate(incident_end_date = date(incident_end_date),
+        incident_begin_date = date(incident_begin_date)) %>%
+  mutate(incident_end_date = if_else(!is.na(incident_end_date), incident_end_date, incident_begin_date))
+```
+
+
+We prepare our sales data via state-wise aggregation (compare Sect. 4.3) and then join the US natural disaster data for the corresponding state and time period. In order to join our dates to the begin and end times in the external dataset we use the `fuzzy_left_join` function from the great [fuzzyjoin package](https://cran.r-project.org/web/packages/fuzzyjoin/index.html): 
+
+```{r}
+# sales time series by state
+foo <- train %>%
+  group_by(state_id) %>% 
+  summarise_at(vars(starts_with("d_")), sum) %>% 
+  rename(id = state_id) %>% 
+  extract_ts() %>% 
+  rename(state = id)
+
+# disaster intervals
+bar <- us_disasters %>% 
+  filter(!is.na(incident_begin_date) & !is.na(incident_end_date)) %>% 
+  mutate(begin = date(incident_begin_date),
+         end = date(incident_end_date)) %>% 
+  distinct(state, incident_type, begin, end) %>% 
+  mutate(disaster = as.integer(1))
+
+disaster_sales <- foo %>% 
+  fuzzy_left_join(bar, by = c("state" = "state", "dates" = "begin", "dates" = "end"), match_fun = list(`==`, `>=`, `<=`)) %>% 
+  select(state = state.x, dates, sales, disaster, type = incident_type) %>% 
+  replace_na(list(disaster = 0))
+
+# same for the validation and evaluation data
+disaster_valid_eval <- tibble(
+  state = rep(c(rep("CA", 28), rep("TX", 28), rep("WI", 28)), 2),
+  dates = c(rep(max(disaster_sales$dates) + seq(1,28,1), 3), rep(max(disaster_sales$dates) + 28 + seq(1,28,1), 3)),
+  dset = c(rep("validation", 3*28), rep("evaluation", 3*28))
+) %>% 
+  fuzzy_left_join(bar, by = c("state" = "state", "dates" = "begin", "dates" = "end"), match_fun = list(`==`, `>=`, `<=`)) %>% 
+  select(state = state.x, dates, disaster, type = incident_type, dset) %>% 
+  replace_na(list(disaster = 0))
+```
+
+
+The result looks like this:
+
+```{r}
+set.seed(4321)
+disaster_sales %>% 
+  sample_n(5)
+```
+
+
+We have our state-wise sales data and added a flag for whether a disaster was declared during that time or not, and also have a feature listing the type of disaster (here all fires in Texas).
+
+
+To get an idea about the frequency of natural disaster periods and types in our data we plot the percentage of disaster days (i.e. dates during which a disaster was declared somewhere in the state) together with the frequency counts of disaster types for each state. Since this first overview only requires knowing the date ranges of our competition data, we can produce these plots for the training, validation, and evaluation periods (compare Fig. 9) which are here visualised as facets.
+
+Note, that for the top panel we don't distinguish between a date having 1 or multiple declarations (or types), while in the bottom panel we can count individual dates more than once:
+
+```{r fig.cap ="Fig. 27", fig.height = 6}
+p1 <- disaster_sales %>% 
+  mutate(dset = "training") %>% 
+  select(-sales) %>% 
+  group_by(dset, state, dates) %>% 
+  summarise(disaster = max(disaster),
+            type = min(type)) %>% 
+  bind_rows(disaster_valid_eval) %>% 
+  group_by(dset, state, disaster) %>% 
+  summarise(ct = n()) %>% 
+  add_tally(ct, name = "total") %>% 
+  mutate(perc = ct/total) %>% 
+  ungroup() %>% 
+  mutate(lab = if_else(disaster == 1, as.character(ct), "")) %>% 
+  mutate(dset = fct_relevel(as.factor(dset), c("training", "validation", "evaluation"))) %>% 
+  ggplot(aes(state, perc, fill = as.logical(disaster))) +
+  geom_col() +
+  geom_text(aes(label = sprintf("%s", lab)), nudge_y = 0.05, col = "violetred" ) +
+  facet_wrap(~ dset) +
+  scale_y_continuous(labels = scales::percent) +
+  scale_fill_manual(values = c("grey70", "violetred")) +
+  theme_hc() +
+  theme(legend.position = "right", plot.subtitle = element_text(size = 10)) +
+  labs(x = "", y = "", fill = "Disaster", title = "Disaster Days: Percentage & Type",
+       subtitle = "Top: Percentage & Number (label) of days. Bottom: count of days\nper disaster type. Both per dataset per state.")
+  
+p2 <- disaster_sales %>% 
+  mutate(dset = "training") %>% 
+  select(-sales) %>% 
+  bind_rows(disaster_valid_eval) %>% 
+  filter(disaster == 1) %>% 
+  group_by(dset, state, type) %>% 
+  summarise(n = n()) %>% 
+  ungroup() %>% 
+  mutate(dset = fct_relevel(as.factor(dset), c("training", "validation", "evaluation"))) %>% 
+  ggplot(aes(type, n, fill = state)) +
+  geom_col(position = "dodge") +
+  coord_flip() +
+  facet_wrap(~ dset, scales = "free_x") +
+  theme_hc() +
+  theme(legend.position = "right") +
+  labs(x = "", y = "", fill = "State", title = "")
+
+p1 / p2
+```
+
+We find:
+
+- There's a notable fraction of natural disaster declarations during the training period in CA (about 18%) and especially TX (about 23%). On the other hand, WI has almost no natural disasters at all.
+
+- More interesting, however, are the validation and evaluation periods. There are already 8 disaster dates in TX during the validation period (i.e. about 25%), but the entire evaluation range had natural disaster occuring in TX. CA and WI are unaffected.
+
+- The types of disasters during the validation and evaluation periods are floods in TX and Fires in CA. Notably, while CA fires also dominate the training period, there are many more fire declarations than flood events in TX during that time.
+
+
+While those numbers are potentially impactful, especially for the crucial evaluation period, a few caveats are in order:
+
+- Natural disasters like fires or floods are relatively local events, and the states in question are very large (especially TX). While the full disaster table provides a geo resolution down to the county-level, in our M5 data we only have information about the states. Thus, without knowing where exactly those stores are located it's hard to tell whether we'd expect them to be affected by a specific disaster. Still, any extra information can be useful and creativity is encouraged.
+
+- We usually don't know ahead of time when disaster strikes. Remember that our task is to make predictions with only the information we would have had just prior to the prediction period in question. However, both the validation and evaluation periods are quite short, and events like fires or floods can (unfortunately) last for more than a few days. In addition, any natural disaster during the *training* period might well have had an impact that we want to take into account.
+
+- In the particular case of the TX floods during the validation & evaluation period, this natural disaster was began on 2016-05-22; i.e. on the last day of the validation data range. Event without knowing how long this event would last, it's fair to assume on this day that it would have an impact on the sales data (if geographically close).
+
+
+Next, let's use our overview layout from Figs. 14 & 15 to examine the impact of these natural disasters on the sales during the training period. Here, I won't look at WI because it only has a few disaster days compared to the other two states. This removes all "Snow" days. I also won't consider the "Tsunami" type which is super rare to begin with. This leaves us with the following layout:
+
+```{r fig.cap ="Fig. 28", fig.height = 6}
+# smoothing fit
+foo <- disaster_sales %>% 
+  filter(type != "Tsunami" | is.na(type)) %>% 
+  filter(!str_detect(as.character(dates), "-12-25")) %>% 
+  filter(state != "WI") %>% 
+  group_by(state, dates) %>% 
+  summarise(disaster = max(disaster),
+            type = min(type),
+            sales = max(sales)) %>% 
+  ungroup() %>%
+  group_by(state) %>% 
+  mutate(loess = predict(loess(sales ~ as.integer(dates - min(dates)) + 1, span = 1/2, degree = 1)),
+         mean_sales = mean(sales)) %>% 
+  mutate(sales_rel = (sales - loess)/mean_sales) %>% 
+  ungroup()
+
+
+p1 <- foo %>% 
+  ggplot(aes(dates, sales/1e3, group = as.factor(disaster), col = as.logical(disaster))) +
+  geom_line(aes(dates, loess/1e3), col = "black", linetype = 2) +
+  geom_line(alpha = 0.3) +
+  geom_smooth(method = "loess", formula = 'y ~ x', span = 2/3, se = FALSE) +
+  scale_colour_manual(values = c("grey70", "red")) +
+  facet_wrap(~ state, scales = "free") +
+  guides(col = guide_legend(nrow = 1)) +
+  theme_hc() +
+  theme(legend.position = "right") +
+  labs(x = "", y = "Sales [$1k]", col = "Disaster", title = "Sales per State during state-specific disaster vs non-disasters")
+
+p2 <- foo %>% 
+  ggplot(aes(state, sales_rel, fill = as.factor(disaster))) +
+  geom_boxplot() +
+  coord_flip() +
+  scale_fill_manual(values = c("grey70", "red")) +
+  theme_hc() +
+  theme(legend.position = "none", axis.text.y = element_blank(), axis.ticks.y = element_blank(),
+        axis.title.x = element_text(size = 10)) +
+  labs(x = "", y = "Relative Sales", fill = "Disaster")
+
+p3 <- disaster_sales %>%
+  filter(type != "Tsunami" | is.na(type)) %>%
+  filter(state != "WI") %>%
+  filter(!str_detect(as.character(dates), "-12-25")) %>%
+  left_join(foo %>% select(state, dates, sales_rel), by = c("state", "dates")) %>% 
+  filter(disaster == 1) %>% 
+  group_by(state, type) %>% 
+  summarise(sales = median(sales_rel)) %>% 
+  ggplot(aes(state, sales, fill = type)) +
+  geom_col(position = "dodge") +
+  coord_flip() +
+  guides(fill = guide_legend(ncol = 2)) +
+  theme_hc() +
+  theme(legend.position = "right", axis.title.x = element_text(size = 10),
+        legend.text = element_text(size = 8)) +
+  labs(x = "", y = "Median Relative Sales", fill = "Type")
+
+layout <- '
+AAAAAA
+AAAAAA
+AAAAAA
+BBCCDD
+BBCCDD
+'
+
+p1 + p2 + p3 + guide_area() + plot_layout(design = layout, guides = 'collect')
+```
+
+
+We find:
+
+- At face value, the relative sales in CA went up during disaster days. However, one needs to take into account here that CA disasters are mostly "Fire", and those fires occur typically in autumn after long periods of drought during the summer. Thus, we need to be careful not to confuse seasonal variations with disaster-specific signal.
+
+- In TX, the average disaster vs non-disaster sales are pretty comparable. There is an interesting spike in mid 2015 that might deserve more analysis. The disasters toward the end of the training window are of course particularly interesting. Those are likely the "Flood" events we see spilling (pardon the pun) into the validation and evaluation ranges.
+
+- The disaster type breakdown in the lower right panel needs to be read with the type frequencies in Fig. 27 in mind. We already commented on the increased CA sales during Fires. Floods in CA are rare, so this apparently strong impact might be an unrelated outlier. Earthquakes are slightly less rare, and tend to have pretty severe consequences, so this signal could be a-priori more reliable. In TX, there is a clear net negative impact of disasters on sales with a reasonably large number of days for Storms, Fires, and Floods to draw from.
+
+- The `type == "Other"` category appears to have the strongest impact, but here again we have to be careful due to very small numbers. If we look into the original `us_disasters` table, we see that there was an "Explosion" that caused an emergency situation during 4 days in April 2013. Perhaps due to the severity of the event there were 2 simultaneous declarations of a major disaster (DR) and for emergency management (EM):
+
+
+```{r}
+us_disasters %>% 
+  filter(incident_type == "Other") %>% 
+  select(starts_with("incident"), declaration_title, declaration_type) %>% 
+  kable() %>% 
+  kable_styling()
+```
+
+
+Finally, we will have a closer look at the CA fires and TX storms & floods.
+
+We prepare individual dataframes for each state - disaster type combination for easier plotting. This could be turned into a function. Then, we adapt the plotting style of Fig. 9 to visualise the Fire data via stacked facets in the left panel of the plot. The right panel shows one particularly interesting year each for TX Storms and Flood, respectively. The sales during emergency periods are plotted in colour; the non-disaster ones in grey. The dashed dark-grey line indicates a smoothing fit similar to the one in Fig. 28 above.
+
+
+```{r}
+foo <- disaster_sales %>% 
+  filter(!str_detect(as.character(dates), "-12-25")) %>% 
+  filter(state != "WI") %>% 
+  mutate(year = year(dates)) %>% 
+  select(-disaster, -type) %>% 
+  group_by(state) %>% 
+  mutate(loess = predict(loess(sales ~ as.integer(dates - min(dates)) + 1, span = 1/2, degree = 1)))
+
+fire_ca <- disaster_sales %>% 
+  filter(state == "CA" & type == "Fire") %>% 
+  filter(!str_detect(as.character(dates), "-12-25")) %>% 
+  group_by(state, dates, type) %>% 
+  summarise(disaster = max(disaster),
+            sales = max(sales)) %>% 
+  ungroup() %>% 
+  mutate(year = year(dates)) %>% 
+  arrange(dates) %>% 
+  mutate(check = as.integer(as.integer(dates - lag(dates, 1) > 1))) %>% 
+  replace_na(list(check = 0)) %>% 
+  mutate(grp = cumsum(check)) %>% 
+  mutate(grp = as.factor(grp))
+
+storm_tx <- disaster_sales %>% 
+  filter(state == "TX" & str_detect(type, "Storm")) %>% 
+  filter(!str_detect(as.character(dates), "-12-25")) %>% 
+  group_by(state, dates, type) %>% 
+  summarise(disaster = max(disaster),
+            sales = max(sales)) %>% 
+  ungroup() %>% 
+  mutate(year = year(dates)) %>% 
+  arrange(dates) %>% 
+  mutate(check = as.integer(as.integer(dates - lag(dates, 1) > 1))) %>% 
+  replace_na(list(check = 0)) %>% 
+  mutate(grp = cumsum(check)) %>% 
+  mutate(grp = as.factor(grp))
+
+flood_tx <- disaster_sales %>% 
+  filter(state == "TX" & str_detect(type, "Flood")) %>% 
+  filter(!str_detect(as.character(dates), "-12-25")) %>% 
+  group_by(state, dates, type) %>% 
+  summarise(disaster = max(disaster),
+            sales = max(sales)) %>% 
+  ungroup() %>% 
+  mutate(year = year(dates)) %>% 
+  arrange(dates) %>% 
+  mutate(check = as.integer(as.integer(dates - lag(dates, 1) > 1))) %>% 
+  replace_na(list(check = 0)) %>% 
+  mutate(grp = cumsum(check)) %>% 
+  mutate(grp = as.factor(grp))
+
+# for plotting convenience
+year(foo$dates) <- 2015
+year(fire_ca$dates) <- 2015
+year(storm_tx$dates) <- 2015
+year(flood_tx$dates) <- 2015
+```
+
+
+```{r fig.cap ="Fig. 29", fig.height = 7, warning=FALSE}
+p1 <- foo %>% 
+  filter(state == "CA") %>% 
+  filter(year <= 2015) %>% 
+  ggplot(aes(dates, sales)) +
+  geom_line(aes(dates, loess), col = "grey40", linetype = 2) +
+  geom_line(col = "grey50") +
+  geom_path(data = fire_ca, aes(group = grp), col = "red") +
+  coord_cartesian(xlim = c(date("2015-06-27"), date("2015-11-03"))) +
+  facet_wrap(~ year, ncol = 1) +
+  theme(legend.position = "none") +
+  labs(x = "", y = "Sales", title = "CA - Fire")
+
+p2 <- foo %>% 
+  filter(state == "TX" & year == 2015) %>% 
+  ggplot(aes(dates, sales)) +
+  geom_line(aes(dates, loess), col = "grey40", linetype = 2) +
+  geom_line(col = "grey50") +
+  geom_path(data = storm_tx %>% filter(year == 2015), aes(group = grp), col = "orange") +
+  coord_cartesian(xlim = c(date("2015-05-01"), date("2015-08-01"))) +
+  facet_wrap(~ year, ncol = 1) +
+  theme(legend.position = "none") +
+  labs(x = "", y = "Sales", title = "TX - Severe Storm(s)")
+
+p3 <- foo %>% 
+  filter(state == "TX" & year == 2016) %>% 
+  ggplot(aes(dates, sales)) +
+  geom_line(aes(dates, loess), col = "grey40", linetype = 2) +
+  geom_line(col = "grey50") +
+  geom_path(data = flood_tx %>% filter(year == 2016), aes(group = grp), col = "blue") +
+  facet_wrap(~ year, ncol = 1) +
+  theme(legend.position = "none") +
+  labs(x = "", y = "Sales", title = "TX - Flood")
+
+p1 + (p2 / p3)
+```
+
+We find:
+
+- The CA fires don't seem to have a strong impact on the sales, when compared to the non-emergency periods in between or from other years. Note however, that around Oct the only years without major fires where 2011 and 2012. The double peak in early July 2014 might be related to the July 4th holiday, although a similar structure is really only seen in 2013.
+
+- For the TX storms, we see an interesting pattern in mid June 2015. Both the spike and the subsequent dip look rather unusal in the context of our overall time series features. 
+
+- As for the TX Flood declarations, those only happened in 2016: first in March and April (training data), then later in May & June (validation & evaluation data). A quick Google search shows that those emergencies took place in the [Houston area](https://www.climaterealityproject.org/blog/central-texas-floods-may-june-2016). The March sales data doesn't seem to have deviated much from the overall trend; although that relatively deep dip at the end of the month could be interesting. As for April and May, it's hard to say. We will know more once we have the additional 28 days of sales from the (current) validation set at our disposal.
+
+---
+
+Thus concludes this Exploratory Data Analysis Notebook - this time for real. Many, many thanks to all of you for the fantastic feedback in the shapes of upvotes and comments! I thoroughly appreciate your support! I'm glad that my work is useful for you, and I'm always open to questions and constructive criticism.
+
+For the final month of this competition, keep in mind that we will get additional training data but lose the live leaderboard scores. I summarised all the changes associated with this switch in a [comprehensive forum post](https://www.kaggle.com/c/m5-forecasting-accuracy/discussion/154999).
+
+Best of success to all of you, and have fun!
+

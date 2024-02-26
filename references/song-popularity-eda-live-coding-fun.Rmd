@@ -1,0 +1,1167 @@
+---
+title: 'Song Popularity EDA - Live Coding Fun'
+date: '`r Sys.Date()`'
+output:
+  html_document:
+    number_sections: true
+    fig_caption: true
+    toc: true
+    fig_width: 7
+    fig_height: 4.5
+    theme: cosmo
+    highlight: tango
+    code_folding: hide
+---
+
+```{r setup, include=FALSE, echo=FALSE}
+knitr::opts_chunk$set(echo=TRUE, error=FALSE)
+knitr::opts_chunk$set(out.width="100%", fig.height = 6, split=FALSE, fig.align = 'default')
+options(dplyr.summarise.inform = FALSE)
+```
+
+
+
+<div 
+    style="background-image: url('https://images.unsplash.com/photo-1487180144351-b8472da7d491?ixlib=rb-1.2.1&ixid=MnwxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8&auto=format&fit=crop&w=1172&q=80'); 
+    width:100%; 
+    height:600px; 
+    background-position:center;">&nbsp;
+</div>
+
+*Photo by Eric Nopanen on Unsplash.*
+
+
+# Introduction
+
+Welcome to a new and exciting Kaggle Community Competition!
+
+Recently, Kaggle [introduced](https://www.kaggle.com/product-feedback/294337) the concept of [community competitions](https://www.kaggle.com/c/about/community): a great way for Kagglers to host their own machine learning contests. This functionality adds a new aspect to the various learning opportunities that Kaggle provides to the community. Participating in a competition is one thing, but planning and hosting one comes with different challenges.
+
+This [specific competition](https://www.kaggle.com/c/song-popularity-prediction) is about predicting Song Popularity based on a set of different features. It is positioned as the first in a series of starter competitions that provide a gentle introduction to machine learning (ML) and data science (DS). This is a classification challenge, with the evaluation metric being chosen as [AUC](https://en.wikipedia.org/wiki/Receiver_operating_characteristic).
+
+[The data](https://www.kaggle.com/c/song-popularity-prediction/data) consists of the standard Kaggle `train.csv` and `test.csv` files, with a `sample_submission.csv` to show you the structure of the file that should be submitted. The data is in a tabular format.
+
+The bulk of this notebook was built during two live-coding sessions on Abhishek Thakur’s channel on Youtube.
+
+Watch the first session here to follow along with the initial feature exploration steps: https://www.youtube.com/watch?v=JXF-7rCcR1c
+
+In the second session we focussed on data reshaping and multi-dimension visuals: https://www.youtube.com/watch?v=2aE6SvCVOis
+
+
+
+# Preparations {.tabset .tabset-fade .tabset-pills}
+
+## Load Libraries
+
+We load a range of libraries for general data wrangling and general visualisation together with more specialised tools.
+
+
+```{r, message = FALSE, warning = FALSE}
+install.packages("recipes", repos="http://cran.r-project.org")
+install.packages("parsnip", repos="http://cran.r-project.org")
+install.packages("workflows", repos="http://cran.r-project.org")
+```
+
+
+```{r, message = FALSE, warning = FALSE}
+# general visualisation
+library('ggplot2') # visualisation
+library('scales') # visualisation
+library('patchwork') # visualisation
+library('RColorBrewer') # visualisation
+library('corrplot') # visualisation
+library('ggthemes') # visualisation
+library('viridis') # visualisation
+library('gt') # table styling
+
+# general data manipulation
+library('dplyr') # data manipulation
+library('readr') # input/output
+library('vroom') # input/output
+library('tibble') # data wrangling
+library('tidyr') # data wrangling
+library('stringr') # string manipulation
+library('forcats') # factor manipulation
+library('janitor') # cleaning
+
+# specific 
+library('glue') # encoding
+library('naniar') # missing values
+#library('gganimate') # visualisation
+library('ggrepel') # visualisation
+library('grid') # visualisation
+library('GGally') # visualisation
+library('ggforce') # visualisation
+#library('ggtext') # visualisation
+
+# modelling
+library("rsample")
+library("recipes")
+library("tune")
+library("parsnip")
+library("yardstick")
+library("workflows")
+library("vip")
+library("dials")
+
+# time keeping
+library("tictoc")
+```
+
+
+
+## Load data
+
+We're setting a path structure that will allow us to run this notebook locally and on Kaggle without having to manually change the file paths from one platform to the other:
+
+```{r}
+if (dir.exists("/kaggle")){
+  path <- "/kaggle/input/song-popularity-prediction/"
+} else {
+  path <- ""
+}
+```
+
+
+
+We use the [vroom](https://cran.r-project.org/web/packages/vroom/vignettes/vroom.html) package for reading data.
+
+```{r}
+train <- vroom(str_c(path, "train.csv"), col_types = cols())
+test <- vroom(str_c(path, "test.csv"), col_types = cols())
+sample_submit <- vroom(str_c(path, "sample_submission.csv"), col_types = cols())
+```
+
+
+## Helper Functions
+
+We make use of a brief helper function to compute binomial confidence intervals.
+
+```{r}
+# function to extract binomial confidence levels
+get_binCI <- function(x,n) as.list(setNames(binom.test(x,n)$conf.int, c("lwr", "upr")))
+```
+
+
+
+# Overview: Structure and Data Content
+
+The first thing you want to do is to look at your actual data in its raw form. This will tell you about the types of features you're dealing with (numeric, categorical, string, etc.), as well as already reveal some characteristics of the dataset. This includes checking for missing values.
+
+Generally, we don't want to look at the test data any more than strictly necessary. The test dataset is intended to serve as our final model validation, and should only include data that the model has never seen before. Since our brain is part of the modelling process as well (or at least it should be), we want to avoid picking up any signal in the test data that could consciously or unconsciously influence our decisions. Thus, this EDA will almost entirely focus on the `train.csv` data.
+
+
+## Look at the Data
+
+We start by examining the data through the `glimpse` tool. It allows us to see the data types involved and the shape of the data.
+
+```{r}
+glimpse(train)
+```
+
+We find:
+
+- With 15 columns and 40k rows this is a relatively small dataset. Not super small, but definitely small enough to explore in its entirety, without having to select subsets for reasons of speed. Generally, selecting a subset is what you want to do if you find yourself waiting too long for some of your EDA code to run. The EDA process should be fast and iterative.
+
+- There is an `id` column with appears to be sequentially numbered rows.
+
+- There are no string columns in the dataset (or otherwise complex columns). All of the features can be expressed numerically. Our target `song_popularity` appears to be binary; probably `audio_mode` as well. The features `key` and `time_signature` look like categorical or ordinal variables.
+
+- We can immediately see some missing values in the data. This is something we need to keep in mind in future exploratory and modelling steps.
+
+
+Let's now look at the data in it's natural tabular form. To make the output a little prettier, we use the relatively new [gt package](https://gt.rstudio.com/index.html) package and borrow some formatting tricks from my [Hidden Gems starter notebook](https://www.kaggle.com/headsortails/hidden-gems-a-collection-of-underrated-notebooks). In general, as you continue to build your DS & ML experience and portfolio you can often borrow and build on previous code and projects.
+
+
+```{r}
+train %>% 
+  head(50) %>% 
+  gt() %>% 
+  tab_header(
+    title = md("**Song Popularity Features**"),
+    subtitle = html(str_c("A live exploration <em><b>", lubridate::today(), "<b></em>"))
+    ) %>% 
+  opt_row_striping() %>% 
+  tab_options(container.height = px(500))
+```
+
+
+We find:
+
+- These are the first 50 rows of the dataset, and they confirm most of our initial impressions.
+
+- Plenty of missing values are visible (encoded as `NA`) in several of the columns.
+
+- Another aspect of the data that becomes apparent are the different scales. Some features have values around 0.5, while others go down to 1e-6 or up to almost 200.
+
+
+
+The third useful tool here is `summary`, which shows you the range and quartile measures for each variable. It also gives you the number of missing values, and the value counts for categoricals (if there are any):
+
+
+```{r}
+summary(train)
+```
+
+We find:
+
+- There are a number of features with values between approximately 0 and 1; such as acousticness, danceability, or liveness among others.
+
+- All of `loudness` values are negative. `audio_mode` seems even more of a binary feature, and `time_signature` and `key` even more of categoricals.
+
+
+
+## Missing Values
+
+Let's have a closer look at those missing values. How many are there in total in the train and test datasets?
+
+
+```{r}
+glue("The train set has { sum(is.na(train)) } missing values, and the test set has { sum(is.na(test)) }.")
+```
+
+This is using the `glue` package for convenience, which allows printing of variable values similar to Python's f-string.
+
+Checking the test set for missing values is fine, in my opinion. This is high-level information that won't affect your model building decisions.
+
+
+For visualising missing values with an out-of-the-box functionality there's the `naniar` package. One thing to keep in mind here is that this kind of plot doesn't really look good if there are too many rows. Thus, we sample 20% of our data for a quick overview.
+
+
+```{r}
+train %>% 
+  sample_frac(0.2) %>% 
+  naniar::vis_miss()
+```
+
+
+But we don't have to rely on pre-packaged plotting solutions. We can build our own missing values visual by making use of data frame reshaping operations through `pivot_longer`. This allows us to effectively transform columns into rows (of sorts), and to plot their percentages of NA's.
+
+For more information on pivoting and reshaping you can watch the [2nd video in the EDA live stream series](https://www.youtube.com/watch?v=2aE6SvCVOis) where I explain the concept and purpose in detail.
+
+While we're at it, we also make this the only plot in this notebook where we add test data information. You want to touch the test data as little as possible, but when it comes to missing values it's worth a check to see whether the train or test distributions differ. (Or you could also train an adverserial model to see if you can get it to distinguish between train vs test on the basis of the feature values alone. If so, then at least some of the feature distributions will likely be different.)
+
+For our plot, we will remove both `id` and `song_popularity` since they don't have missing values (and `id` is just the row index):
+
+```{r fig.height=4.5}
+train %>% 
+  mutate(file = "train") %>% 
+  bind_rows(test %>% mutate(file = "test")) %>% 
+  select(-id, -song_popularity) %>% 
+  mutate(across(-file, as.numeric)) %>% 
+  pivot_longer(-file, names_to = "feature", values_to = "value") %>% 
+  mutate(is_na = is.na(value)) %>% 
+  group_by(file, feature) %>% 
+  summarise(na_frac = mean(is_na)) %>% 
+  ungroup() %>% 
+  ggplot(aes(reorder(feature, na_frac, FUN = min), na_frac, fill = feature)) +
+  geom_col() +
+  scale_y_continuous(labels = scales::percent) +
+  coord_flip() +
+  facet_wrap(~ file) +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  labs(x = "", y = "", title = "Percentage of missing values by feature for test vs train sets")
+```
+
+
+We find:
+
+- We're missing 5% of all values. That's a sizeable portion. Not enough to make an analysis futile, of course, but sufficient to make us pay closer attention to what is going on here.
+
+- Not all features have missing values, though. We find them only in the first 8 columns (not counting the `id`). Consequently, those columns have around 10% missing values.
+
+- There are some slight differences in the train vs test percentages of missing values for most features.
+
+
+
+## Feature transformations
+
+This is a slightly non-linear step when it comes to the evolution of this notebook. As we confirm our initial impressions of certain feature columns in the following visualisation step, we go back here and modify those data types globally so that we don't have to write the transformations every time.
+
+Specifically, we will be turning the features `key` and `time_signature` into factors (i.e. categoricals)
+
+```{r}
+train <- train %>% 
+  mutate(across(c(key, time_signature), as.factor)) %>% 
+  mutate(across(c(song_popularity, audio_mode), as.logical))
+```
+
+
+
+
+# Visualisation - Individual Features
+
+After getting an initial idea about our features and their values, we can now dive into the visual part of the exploration. I recommend to **always plot your data**. Sometimes this might be challenging, e.g. because you have tons of features. In that case, you want to start at least with a subset before you run any dimensionality reduction or other tools. This step is as much about spotting issues and irregularities as it is about learning more about the shapes and distributions of your features.
+
+We start by looking at the individual distributions for each predictor feature; a luxury we can affort with such a relatively small dataset. Then we will also examine the target distribution.
+
+
+## Predictor Features
+
+In the live session, we were building this plot step by step. (Well, we got most of the way there.) It really pays off to take the time and investigate each feature separately. This is one of the most instructive steps in the EDA process, where you aim to learn how messed up your features are. No dataset is perfect. We want to figure out how severe those imperfections are, and whether we can live with them or have to address them.
+
+Different kind of data types go best with different kind of visuals. My recommendation is to start out with density plots or histograms for numerical features, and with barcharts for those that are better expressed as types of categories.
+
+To assemble the plots in the comprehensive, dashboard-like overview we are using the fantastic [patchwork package](https://patchwork.data-imaginist.com/index.html). 
+
+
+```{r fig.height=12, fig.width=13}
+p1 <- train %>% 
+  filter(!is.na(song_duration_ms)) %>%
+  ggplot(aes(song_duration_ms)) +
+  geom_density(fill = "blue") +
+  theme_minimal() +
+  labs(x = "", title = "Song duration")
+
+p2 <- train %>% 
+  filter(!is.na(acousticness)) %>%
+  ggplot(aes(acousticness)) +
+  geom_density(fill = "orange", bw = 0.01) +
+  theme_minimal() +
+  labs(x = "", title = "Acousticness")
+
+p3 <- train %>% 
+  filter(!is.na(danceability)) %>%
+  ggplot(aes(danceability)) +
+  geom_density(fill = "red") +
+  theme_minimal() +
+  labs(x = "", title = "Danceability")
+
+p4 <- train %>% 
+  filter(!is.na(energy)) %>%
+  ggplot(aes(energy)) +
+  geom_density(fill = "darkgreen") +
+  theme_minimal() +
+  labs(x = "", title = "Energy")
+
+p5 <- train %>% 
+  filter(instrumentalness > 0) %>% 
+  filter(!is.na(instrumentalness)) %>%
+  ggplot(aes(instrumentalness)) +
+  geom_density(fill = "violet") +
+  scale_x_continuous(trans = "log") +
+  theme_minimal() +
+  labs(x = "", title = "Instrumentalness (log transform)")
+
+p6 <- train %>% 
+  filter(!is.na(key)) %>% 
+  count(key) %>% 
+  ggplot(aes(key, n, fill = key)) +
+  geom_col() +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  labs(x = "", title = "Key")
+
+
+p7 <- train %>% 
+  filter(!is.na(liveness)) %>%
+  ggplot(aes(liveness)) +
+  geom_density(fill = "purple") +
+  theme_minimal() +
+  labs(x = "", title = "Liveness")
+
+
+p8 <- train %>% 
+  filter(!is.na(loudness)) %>%
+  ggplot(aes(loudness)) +
+  geom_density(fill = "lightblue") +
+  theme_minimal() +
+  labs(x = "", title = "Loudness")
+
+p9 <- train %>% 
+  filter(!is.na(audio_mode)) %>%
+  count(audio_mode) %>% 
+  ggplot(aes(audio_mode, n, fill = as.factor(n))) +
+  geom_col() +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  labs(x = "", title = "Audio Mode")
+
+p10 <- train %>% 
+  filter(!is.na(speechiness)) %>%
+  ggplot(aes(speechiness)) +
+  geom_density(fill = "darkred") +
+  theme_minimal() +
+  labs(x = "", title = "Speechiness")
+
+p11 <- train %>% 
+  filter(!is.na(tempo)) %>%
+  ggplot(aes(tempo)) +
+  geom_density(fill = "orange4") +
+  theme_minimal() +
+  labs(x = "", title = "Tempo")
+
+p12 <- train %>% 
+  filter(!is.na(time_signature)) %>%
+  count(time_signature) %>% 
+  ggplot(aes(time_signature, n, fill = time_signature)) +
+  geom_col() +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  labs(x = "", title = "Time signature")
+
+p13 <- train %>% 
+  filter(!is.na(audio_valence)) %>%
+  ggplot(aes(audio_valence)) +
+  geom_density(fill = "yellow4") +
+  theme_minimal() +
+  labs(x = "", title = "Audio Valence")
+
+#(p1 + p2 + p3) / (p4 + p5 + p6) / (p7 + p8 + p9) / (p10 + p11 + p12) / p13
+
+
+design <- "
+ABC
+DEE
+FFG
+HIJ
+KLM
+"
+
+p1 + p2 + p3 + p4 + p5 + p6 + p7 + p8 + p9 + p10 + p11 + p12 + p13 +
+  plot_layout(design = design) +
+  plot_annotation(title = 'Song Popularity Features')
+```
+
+We find:
+
+- Our initial impressions of the data types have largely been confirmed: `audio_mode` is a boolean feature, and `time_signature` and `key` are ordinal or categorical ones (or integer; although a better understanding of those musical concepts would certainly benefit from some domain knowledge.)
+
+- A number of features are bounded between 0 and 1: `accosticness`, `danceability`, `energy`, `liveliness`, `speechiness`, and `audio_valence`.
+
+- The feature `loudness` looks like it refer to the decibel scale.
+
+- The distribution of `instrumentalness` is heavily right-skewed, and even after a log transform this feature doesn't look very well-behaved. This might need a bit more work.
+
+
+
+## Target: Song Popularity
+
+On to the target itself. We figured out that `song_popularity` is a binary feature, and thus we can express it as boolean. Here we plot a barchart, and create a scale of percentages, rather than absolute values.
+
+```{r fig.height=3}
+train %>% 
+  count(song_popularity) %>% 
+  mutate(frac = n/sum(n)) %>% 
+  ggplot(aes(song_popularity, frac, fill = song_popularity)) +
+  geom_col() +
+  scale_y_continuous(labels = scales::percent) +
+  theme_hc() +
+  theme(legend.position = "none") +
+  labs(y = "", x = "", title = "Target: Song Popularity")
+```
+
+We find:
+
+- There is a slight imbalance in the target distribution: a bit more than 60/40. Not super imbalanced, but something to keep in mind.
+
+
+
+# Feature Interactions
+
+After learning more about each individual feature, we now want to see them interacting with one another. It's best to perform those steps in that order, so that you can understand and interpret the interactions in the context of the overall distributions.
+
+We will start with studying the impact of the target `song_popularity` on each individual feature, then look at correlations and relationships between the predictor features, before moving on to even higher dimensional relationships.
+
+
+## Target Impact 
+
+We have seen all the feature distributions, now we want to investigate whether they look different based on the target value.
+
+
+First the numerical features. We're again transforming `instrumentalness` to make it easier to visualise. This was the data pivoting example I used to explain the concept in the [2nd live stream](https://www.youtube.com/watch?v=2aE6SvCVOis):
+
+
+```{r fig.height=7, fig.width=10}
+train %>% 
+  select(where(is.numeric), song_popularity, -id) %>% 
+  drop_na() %>% 
+  filter(instrumentalness > 0) %>% 
+  mutate(instrumentalness = log10(instrumentalness)) %>% 
+  pivot_longer(c(-song_popularity), names_to = "type", values_to = "value") %>% 
+  ggplot(aes(value, fill = song_popularity)) +
+  geom_density(alpha = 0.5) +
+  facet_wrap(~ type, scales = "free") +
+  theme_minimal() +
+  theme(legend.position = "top") +
+  labs(title = "Target impact - numerical features")
+```
+
+We find:
+
+- There are no features that show strong differences in their distributions for popular vs unpopular songs. No smoking guns here that.
+
+- Some features like `energy`, `audio_valence`, and perhaps `tempo` show some degree of difference between target classes. Others, like `song_duration_ms` or `liveness` appear to overlap almost perfectly.
+
+
+Now we can check the categorical features (and we will group the binary `audio_mode` into those for this purpose). Instead of only showing the final plot, I will include here how I approach my preferred visualisation in 3 steps: 
+
+
+In the first step, we choose `geom_bar` to build bar plots instead of density plots. Other than that, this is pretty much the same approach as above:
+
+
+```{r fig.height=5, fig.width=9}
+train %>% 
+  drop_na() %>% 
+  select(audio_mode, key, time_signature, song_popularity) %>% 
+  mutate(audio_mode = as.factor(as.numeric(audio_mode))) %>% 
+  pivot_longer(c(-song_popularity), names_to = "type", values_to = "value") %>% 
+  mutate(type = fct_relevel(as.factor(type), c("audio_mode", "time_signature", "key"))) %>% 
+  ggplot(aes(value, fill = song_popularity)) +
+  geom_bar(position = "dodge") +
+  facet_wrap(~ type, scales = "free", nrow = 2) +
+  theme_minimal() +
+  theme(legend.position = "top") +
+  labs(title = "Target impact - categorical features - step 1")
+```
+
+This kind of view does tell us as much, though, because the imbalance between popular and unpopular songs appears to be pretty universal for all realisations of all features. In order to see the relative percentages of `song_popularity = 1` or 0 (or true vs false as we're expressing it here) we need to compute those fractions for every feature & value combination. Luckily, this can be done quickly through pivoting.
+
+In this 2nd step, we will only look at the percentage of popular songs (since the percentage of unpopular songs is uniquely determined by 1 - percentage of popular songs in a binary setting.):
+
+
+```{r fig.height=3}
+train %>% 
+  drop_na() %>% 
+  select(audio_mode, key, time_signature, song_popularity) %>% 
+  mutate(audio_mode = as.factor(as.numeric(audio_mode))) %>% 
+  pivot_longer(c(-song_popularity), names_to = "type", values_to = "value") %>% 
+  group_by(type, value, song_popularity) %>% 
+  summarise(n = n()) %>% 
+  mutate(frac = n/sum(n)) %>% 
+  ungroup() %>% 
+  filter(song_popularity != FALSE) %>% 
+  ggplot(aes(value, frac, fill = type)) +
+  geom_col() +
+  scale_y_continuous(labels = scales::percent) +
+  facet_wrap(~ type, scales = "free_x") +
+  theme_minimal() +
+  theme(legend.position = "top") +
+  labs(title = "Target impact - categorical features - step 2: percentages of popular songs")
+```
+
+
+This would already be an acceptable outcome. But we can go a step further. First, barplots are not really that important here when we're dealing with percentages. And second, we can get the (purely statistical) uncertainties on these percentages through binomial confidence limits (which take into account the underlying absolute numbers). This gets us to the 3rd and final step:
+
+
+```{r fig.height=4}
+train %>% 
+  drop_na() %>% 
+  select(audio_mode, key, time_signature, song_popularity) %>% 
+  mutate(audio_mode = as.factor(as.numeric(audio_mode))) %>% 
+  pivot_longer(c(-song_popularity), names_to = "type", values_to = "value") %>% 
+  count(type, value, song_popularity) %>% 
+  mutate(song_popularity = str_to_lower(str_c("song_", as.character(song_popularity)))) %>% 
+  pivot_wider(names_from = song_popularity, values_from = n) %>%
+  group_by(type, value) %>% 
+  mutate(frac = song_true/(song_true + song_false)*100,
+         lwr = get_binCI(song_true,(song_true + song_false))[[1]]*100,
+         upr = get_binCI(song_true,(song_true + song_false))[[2]]*100
+         ) %>%
+  ggplot(aes(value, frac, col = type)) +
+  geom_point(size = 4) +
+  geom_errorbar(aes(ymin = lwr, ymax = upr)) +
+  facet_wrap(~ type, scales = "free_x") +
+  theme_hc() +
+  theme(legend.position = "top") +
+  labs(title = "Target impact - categorical features - step 3: points with uncertainties")
+```
+
+We find:
+
+- For the 2 `audio_mode`s there's practically no difference.
+
+- Some of the `key` cateogories might have different fractions of popular songs (e.g. 5 vs 8), but we're comparing multiple points here and ourerror bars only correspond to 95% to begin with.
+
+- You can see the binomial nature of those errorbars by looking at the large uncertainties for `key = 11` or `time_signature` 2 or 5, which have overall rather small numbers.
+
+
+
+## Predictor Feature Interactions
+
+How do the predictor features interact with each other? Are there any redundancies or strong relationships? We will start out with a correlation matrix, and then look at features of interest in a bit more detail.
+
+
+### Correlations Overview
+
+When plotting a correlation matrix, we need to make sure that what we're feeding in doesn't include any missing values. We can specify this via the parameter `use = "complete.obs"`:
+
+
+```{r fig.height=7, fig.width=12}
+train %>% 
+  select(-id) %>% 
+  mutate(across(everything(), as.numeric)) %>% 
+  cor(use = "pairwise.complete.obs", method = "spearman") %>% 
+  corrplot(type = "upper", diag = FALSE, method = "square")
+```
+
+
+We find:
+
+- There's a strong anti-correlation between `acousticness` vs `energy` and `loudness`, respectively. Consequently, `energy` and `loudness` share a strong correlation.
+
+- None of the features individually show a notable correlation with the target `song_popularity`.
+
+
+### Categorical feature interactions
+
+Whenever we're looking at categorical features, we can assign a visualisation dimension like colour, size, or facets to those. We will start modifying our trusted density plots to look at the distributions of `energy` (potentially one of the more interesting numerical features) for the different values of `time_signature` (here encoded as colour):
+
+
+```{r fig.height=3}
+train %>% 
+  drop_na() %>% 
+  ggplot(aes(energy, fill = time_signature)) +
+  geom_density(alpha = 0.5, bw = 0.03) +
+  theme_minimal() +
+  theme(legend.position = "top")
+```
+
+
+We find:
+
+- There are clear differences between the energy peaks for `time_signature = 2` vs `4`.
+
+- Smaller differences exist between the other values. `3` and `4` are the categories with the large numbers, and `4` is clearly more energetic than `3`.
+
+
+We can expand that idea to more than 2 dimensions by adding another categorical variable: `key`. Naturally, the combinations of `key` and `time_signature` give us a grid, and we can construct a heatmap using the values of `energy`. We use `geom_tile` to plot this heatmap:
+
+
+
+```{r fig.height=3}
+train %>% 
+  drop_na() %>% 
+  group_by(key, time_signature) %>% 
+  summarise(energy = median(energy, na.rm = TRUE)) %>% 
+  ggplot(aes(key, time_signature, fill = energy)) +
+  geom_tile() +
+  scale_fill_viridis_c() +
+  theme_minimal() +
+  theme(legend.position = "top")
+```
+
+
+We find:
+
+- For `time_signature`s `2` and `5` we have no instances of `key == 11`. This is no big surprise, since those three values are already rare individually, which makes their combinations even more rare.
+
+- The lower keys and time signatures have less energy, on average, than the higher ones. In particular `key` 9 or 11.
+
+
+
+
+### Numerical feature interaction
+
+For numerical features we can often begin to visualise their interactions through scatter plots. We will demonstrate this process using `energy` vs `loudness`; 2 of more strongly correlated features.
+
+In `ggplot2` it is easy to add a smoother model to a scatter plot via the `geom_smooth` method. Here we choose a simple linear fit. Regardless of the specific method, this is a great way of visualising the underlying trend in a messy scatterplot. We also go a step further and overplot some 2d density contours to better resolve what happens in the busy parts of the plot:
+
+
+```{r fig.height=3.5}
+train %>% 
+  drop_na() %>% 
+  ggplot(aes(energy, loudness)) +
+  geom_point(size = 0.5) +
+  geom_density2d() +
+  geom_smooth(method = "lm", formula = "y~x", col = "red") +
+  theme_minimal() +
+  labs(title = "Numerical features correlation example: energy vs loudness")
+```
+
+We find:
+
+- The relationship looks pretty solid; not just built on outliers or strange.
+
+- The 2 peaks of `energy` don't map 1:1 to the 2 peaks of `loudness` (which has a relatively similar distribution shape).
+
+
+Like we did above for the categorical features and `energy`, you can now start to bring categorical features into the mix to further investigate interesting effects. Here we split the above plot by `time_signature`:
+
+
+```{r fig.height=4.5}
+train %>% 
+  drop_na() %>% 
+  ggplot(aes(energy, loudness)) +
+  geom_point(size = 0.5) +
+  geom_density2d() +
+  geom_smooth(method = "lm", formula = "y~x", col = "red") +
+  facet_wrap(~ time_signature) +
+  theme_minimal() +
+  labs(title = "Numerical features correlation example: energy vs loudness vs time_signature")
+```
+
+We find:
+
+- Other than the obvious sparsity of the samples with `key` 2 or 5, we see slightly different relations between the better populate 3 and 4 facets.
+
+- The `key == 4` sample appears to have on average fewer values below -15
+
+
+
+## Feature Interactions Overview
+
+A 1-plot overview of feature interactions can be provided through pairplots; here implemented via the `GGally` package. You might decide to start your closer inspection of features with this kind of plot, instead of or in addition to a correlation matrix. However, those kind of plots scale less well to larger numbers of features than correlation plots do (which only have 1 summary variable to display for each combination).
+
+Here, I'm showing the scatterplot in the lower left half vs a linear fit (on top of a much fainter scatter plot) in the upper right half. I only include numerical features. And I've chosen the least cluttered style with many plots elements removed. And still this visual can be harder to read than others, and it is easier to overlook a particular insight.
+
+
+```{r warning=FALSE, message=FALSE, fig.height=10, fig.width=12}
+train %>% 
+  select(where(is.numeric), -id) %>% 
+  # select(seq(2,4)) %>% 
+  drop_na() %>% 
+  filter(instrumentalness > 0) %>% 
+  mutate(instrumentalness = log10(instrumentalness)) %>% 
+  ggpairs(lower = list(continuous = wrap("points", alpha = 0.3, size=0.01)),
+          upper = list(continuous = wrap("smooth", alpha = 0.005, size = 0.1)),
+          progress = FALSE) +
+  theme_tufte() +
+  theme(axis.text = element_blank(), axis.ticks = element_blank()) +
+  labs(title = "Pair plots: lower: scatter; upper: linear fit")
+```
+
+We find:
+
+- We've already seen the correlation strengths in the corrplot, and we know the distribution shapes from previous visuals.
+
+- In the scatter facets, there's not much that calls for additional exploration. Most relations represent a pretty direct superposition of their 2 contributing feature distributions (and, for instance, their multi-peak structure).
+
+
+
+# Intermission: The curious case of Instrumentalness
+
+
+Before we go further with our multi-feature explorations, I feel the need to stop and have a deeper look at `instrumentalness`. This feature has been bugging me ever since we first encountered it. It behaves strangely, and requires more than usual effort to inspect it properly.
+
+
+```{r}
+inst <- train %>% 
+  select(instrumentalness) %>% 
+  filter(!is.na(instrumentalness))
+```
+
+
+In this analysis, I first started to throw several transformation at the pesky feature (without much success), before deciding to take a step back and to look closer at its original distribution. There is a convenient way to zoom in to a specific range of a distribution without losing sight of the bigger picture. The tool `geom_zoom` is provided by the `ggforce` package.
+
+Here we're zooming into what looks like the main mass of the distribution; somwhere below 0.05. We'll stick to the violet colour we gave the feature in our first overview plot:
+
+```{r fig.height=5}
+inst %>% 
+  ggplot(aes(instrumentalness)) +
+  geom_histogram(bins = 1000, fill = "violet") +
+  facet_zoom(x = instrumentalness < 0.05) +
+  labs(title = "Instrumentalness - Zoom into the main distribution mass")
+```
+
+We find:
+
+- This is a useful result, because it points towards a relatively well behaved part of the distribution below 0.01.
+
+- We know that there are other values above that threshold of 0.01, so let's count both groups:
+
+
+
+```{r}
+inst %>% 
+  mutate(subset = if_else(instrumentalness < 0.01, "main_subset", "side_subset")) %>% 
+  count(subset) %>% 
+  mutate(percentage = n/sum(n) * 100) %>% 
+  gt() %>% 
+  tab_options(container.height = px(200))
+```
+
+
+About 91% of `instrumentalness` has values below 0.01 and fall into the "main distribution". The remaining 9% are above that threshold and we will call that the "side distribution".
+
+That's enough sample size (in the side distribution) to plot both parts of `instrumentalness` next to each other, but in separate facets so that the presence of one distribution doesn't make it harder to see the other one. We'll also add some target impact while we're at it:
+
+
+```{r fig.width=9}
+p1 <- inst %>% 
+  mutate(subset = if_else(instrumentalness < 0.01, "main_subset", "side_subset")) %>%  
+  ggplot(aes(instrumentalness, fill = subset)) +
+  geom_density() +
+  facet_wrap(~ subset, scales = "free") +
+  scale_fill_manual(values = c("violet", "darkviolet")) +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  labs(x = "", subtitle = "Based on a threshold of instrumentalness = 0.01 the feature can be separated pretty cleanly into 2 separate distributions")
+
+p2 <- train %>% 
+  filter(!is.na(instrumentalness)) %>% 
+  mutate(subset = if_else(instrumentalness < 0.01, "main_subset", "side_subset")) %>%
+  ggplot(aes(instrumentalness, fill = song_popularity)) +
+  geom_density(alpha = 0.5) +
+  facet_wrap(~ subset, scales = "free") +
+  theme_minimal() +
+  theme(legend.position = "top") +
+  labs(x = "", subtitle = "And here is how those distributions are impacted by the target")
+
+p1 / p2 + plot_annotation(title = "Instrumentalness: Decomposition")
+```
+
+We find:
+
+- Now that looks considerably nicer! The "side subset" distributions looks much closer to what we have seen for similar feature concepts such as `speechiness` or `acousticness`; i.e. it's a relatively broad distribution between zero and one, with a larger peak somewhere towards one of those boundaries.
+
+- The main subset has a pretty well behaved distribution: centred slightly above zero, with a lower tail into those pesky negative values that had been giving us some trouble, but an overall rather symmetric look.
+
+Let's compare it to an actual normal distribution with the same mean and standard deviation as we're observing here:
+
+
+```{r fig.height=3}
+foo <- inst %>% 
+  filter(instrumentalness < 0.01) 
+
+foo %>% 
+  ggplot(aes(instrumentalness)) +
+  geom_density(bw = 1e-5) +
+  stat_function(fun = dnorm, args = list(mean = mean(foo$instrumentalness), sd = sd(foo$instrumentalness)), col = "red") +
+  theme_minimal() +
+  labs(title = "Instrumentalness: main distribution vs normal distribution curve (red)")
+```
+
+We find:
+
+- Not bad. There's an obvious deviation, but the tails aren't too far off.
+
+- This could potentially be another superposition of 2 or more noisy normal distributions. Some kind of noise in the data collection process? But this "noise" dominates 90% of the data.
+
+
+I recommend trying to treat `instrumentalness` as two (or more) separate features, or treat it in another way that takes into account its special status.
+
+
+Here's a quick addendum to this: `instrumentalness` isn't the only feature that dips conspicuously just below zero. The other example is `acousticness`, which is otherwise much better behaved, though. Let's briefly look at `acousticness` through a similar lens:
+
+
+```{r fig.height=4.5}
+train %>% 
+  select(acousticness) %>% 
+  filter(!is.na(acousticness)) %>% 
+  ggplot(aes(acousticness)) +
+  geom_histogram(bins = 1000, fill = "orange") +
+  facet_zoom(x = acousticness < 0.05) +
+  labs(title = "Acousticness - Zoom into the range near zero")
+```
+
+We find:
+
+- This is another curious feature that's worth taking into account.
+
+
+
+# Feature-target interactions
+
+Once we have found interesting correlations in the predictor features we can look for additional clustering or trend effects for our target. There are various dataviz styles we can employ here. If the target is a category or a binary, such as in our case, we can often make effective use of splitting existing visuals into 2 facets, 2 colours, or other discrete styles.
+
+Here, we'll start with the heatmap and 2d-density plots from above and add facetting by `song_popularity` to each of them:
+
+
+```{r fig.height=4.5}
+train %>% 
+  drop_na() %>% 
+  group_by(key, time_signature, song_popularity) %>% 
+  summarise(energy = median(energy, na.rm = TRUE)) %>% 
+  ggplot(aes(key, time_signature, fill = energy)) +
+  geom_tile() +
+  scale_fill_viridis_c() +
+  facet_wrap(~ song_popularity, nrow = 2) +
+  theme_minimal() +
+  theme(legend.position = "right")
+```
+
+We find:
+
+- Once again, there are no obvious clusters that behave differently for popular vs unpopular songs
+
+- There are a few individual combinations in our heatmap that look different, though. For instance, `key == 1` and `time_signature == 4` appears to have somewhat less energy for popular songs than for unpopular ones. This might be a small sample effect, but in a dataset that doesn't have any real smoking guns, we have to try to make the most out of those minor differences.
+
+
+```{r}
+train %>% 
+  drop_na() %>% 
+  select(key, time_signature, energy, song_popularity) %>% 
+  filter(key == 1 & time_signature == 4) %>% 
+  group_by(song_popularity) %>% 
+  summarise(count = n(),
+            mean_energy = mean(energy, na.rm = TRUE),
+            median_energy = median(energy, na.rm = TRUE),
+            sd_energy = sd(energy, na.rm = TRUE)) %>% 
+  gt() %>% 
+  tab_header(
+    title = md("**Key = 1 & Time Signature = 4**"),
+    )
+```
+
+
+In a similar way we can compare the density distributions of continuous features. Here we decide to fill in the distributions of audio valence vs energy with a colour scale, and plot the popular vs unpopular songs in facets side by side:
+
+
+```{r fig.height=3.5}
+train %>% 
+  drop_na() %>% 
+  ggplot(aes(energy, audio_valence)) +
+  geom_density2d_filled() +
+  facet_wrap(~ song_popularity)
+```
+
+We find:
+
+- Those densities are very similar. Each facet essentially shows an overlap of the 2 energy peaks with the broader audio valence peaks. Not much interaction here.
+
+
+We can again employ the `ggpairs` function to get a quick overview of potentially interesting feature interacations and their target impact:
+
+
+```{r warning=FALSE, message=FALSE, fig.height=10, fig.width=12}
+foo <- train %>% 
+  select(where(is.numeric), -id, song_popularity) %>% 
+  drop_na() %>% 
+  filter(instrumentalness > 0) %>% 
+  mutate(instrumentalness = log10(instrumentalness))
+
+foo %>% 
+  ggpairs(
+    columns = 1:(ncol(foo)-1),
+    mapping = aes(color = song_popularity, alpha = 0.5),
+    lower = list(continuous = wrap("points", alpha = 0.3, size=0.01)),
+    upper = list(continuous = wrap("smooth", alpha = 0.005, size = 0.1)),
+    progress = FALSE) +
+  theme_tufte() +
+  theme(axis.text = element_blank(), axis.ticks = element_blank()) +
+  labs(title = "Pair plots: lower: scatter; upper: linear fit - colour by target")
+```
+
+
+We find:
+
+- The upper right half of the matrix might be most helpful here. Any instances where the two linear trend lines diverge could be worth following up.
+
+- We have already examined the peculiar role of `instrumentalness`. Other than that, we will have a closer look at `acousticness` vs `danceability` and `liveness` to round out this EDA. (Although note that `acousticness` has a similar peculiarity to `instrumentalness`).
+
+We'll apply transformations to both `liveness` and `acousticness` (see above for a note on the peculiarity of `acousticness`). We then cut `danceability` into 4 bins which we turn into facets. For each facet, we plot 
+
+
+```{r fig.height=4.5}
+train %>% 
+  select(acousticness, liveness, danceability, song_popularity) %>% 
+  drop_na() %>% 
+  filter(acousticness > 0) %>% 
+  mutate(danceability = cut(danceability, seq(0, 1, 0.25))) %>% 
+  ggplot(aes(acousticness, liveness, col = song_popularity)) +
+  geom_point(alpha = 0.1, size = 1) +
+  geom_smooth(method = "lm", formula = 'y ~ x') +
+  scale_x_continuous(trans = "sqrt") +
+  scale_y_continuous(trans = "log") +
+  facet_wrap(~ danceability) +
+  theme_minimal() +
+  theme(legend.position = "top")
+```
+
+
+We find:
+
+- The differences are minimal here. In each of the facets, the two trend lines are nearly indistinguishable.
+
+- In between facets there might be some slight differences, but there's nothing that appears particularly actionable to me.
+
+
+This concludes our comprehensive EDA.
+
+
+# Baseline model via tidymodels
+
+Let's add a quick baseline model to this EDA. This should get you started in modelling with R. I won't compete in this challenge, but by building on this baseline (and the EDA insights) a decent outcome is certainly possible.
+
+
+I'll read in the original train + test data again, so that we can apply any transformations in the preprocessing step.
+
+```{r}
+train <- vroom(str_c(path, "train.csv"), col_types = cols())
+test <- vroom(str_c(path, "test.csv"), col_types = cols())
+sample_submit <- vroom(str_c(path, "sample_submission.csv"), col_types = cols())
+```
+
+
+The new suite of packages for machine learning in R is the [tidymodels framework](https://www.tidymodels.org/), which is the successor of the [caret](https://topepo.github.io/caret/) package by the same developer. Tidymodels integrates seamlessly into the tidyverse. It can be seen (as `caret` was) as an analogue of `scitkit-learn` in the R domain.
+
+
+## Preprocessing with recipes
+
+This is easily the step we're putting the most thought into for this baseline, since we want to apply some of the things we've learnt during the EDA. The data preprocessing package within `tidymodels` is called `recipes`.
+
+First, we're turning our features `key, time_signature, audio_mode` into factors. Then we're imputing the missing values with a simple median for the continuous features and the mode for the categorical ones. (Our classification target needs to be a factor, too.) There are multiple other imputation functions available within `recipes`. For inspiration on how to treat missing values check out [Rob's Notebook](https://www.kaggle.com/robikscube/handling-with-missing-data-youtube-stream). 
+
+We're then appyling a one-hot encoding to the categorical features. That's not really necessary for many of the model types, including the tree-based ones, but here we're starting with a simpler model to get started. We also normalise all numerical features.
+
+To add a little bit of spice, we're also removing the spurious parts of the `instrumentalness` and `acousticness` distributions and replace them with NAs (which are then imputed). This happens at the beginning of the recipe.
+
+
+```{r}
+rec_lr <- 
+  recipe(song_popularity ~ ., data = train) %>%
+  update_role(id, new_role = "id") %>% 
+  step_mutate(instrumentalness = if_else(instrumentalness < 0.01, NA_real_, instrumentalness)) %>%
+  step_mutate(acousticness = if_else(acousticness < 0.035, NA_real_, acousticness)) %>%
+  step_mutate_at(c(key, time_signature, audio_mode), fn = as.factor) %>%
+  step_mutate(song_popularity = as.factor(song_popularity), skip = TRUE) %>% 
+  step_impute_median(all_numeric_predictors()) %>% 
+  step_impute_mode(all_nominal(), -all_outcomes()) %>%
+  step_dummy(all_nominal(), -all_outcomes()) %>%
+  step_normalize(all_numeric_predictors()) 
+```
+
+
+We're taking the `id` column along, but we don't want it to be affected by any of the processing. This is achieved using "roles".
+
+You can look into the result of those preprocessing steps by "prepping" and "juicing" the recipe with the data. This is just an example to see what's happening in the processing. In the `tidymodels` style, we will be using the recipe directly; not the transformed data.
+
+
+```{r}
+# Sanity check
+rec_lr %>%
+  prep() %>% 
+  juice() %>% 
+  head(50) %>% 
+  gt() %>% 
+  tab_header(
+    title = md("**Preprocessing output**")
+    ) %>% 
+  opt_row_striping() %>% 
+  tab_options(container.height = px(500))
+```
+
+
+
+
+## Define the model with parsnip
+
+The models themselves are handled by the `parsnip` package. It includes pretty much all the popular models, including the random forests and tree boosters. Here we're just using a simple regularised logistic regression.
+
+The parameters are pretty straightforward: We're using a ridge regression model, indicated by `mixture = 0`. (A `mixture = 1` would be a pure lasso model, i.e. L1 regularisation, and anything between 0 and 1 is possible.) For the regularisation penalty (i.e. strength) we will be tuning this hyperparameter. We're using the placeholder `tune()` for that.
+
+
+```{r}
+mod_lr <- 
+  logistic_reg(penalty = tune(), mixture = 0) %>% 
+  set_engine("glmnet")
+```
+
+
+The tidymodels custom is to combine both the preprocessing recipe and the model into a "workflow" object, which can then be used for cross-validation or hyper-parameter tuning. We'll demonstrate both of those steps here in a moment.
+
+```{r}
+wfl_lr <- workflow() %>% 
+  add_model(mod_lr) %>% 
+  add_recipe(rec_lr)
+```
+
+
+
+## CV tuning
+
+We set a seed and define a 5-fold CV structure. We also define a simple hyperparameter grid manually. There are many other tuning strategies available.
+
+```{r}
+set.seed(4321)
+folds <- vfold_cv(train, v = 5)
+
+grid_lr <- tibble(penalty = 10^seq(-4, -1, length.out = 20))
+```
+
+
+Then we run the tuning, which is pretty fast since we're not doing anything super fancy here. This CV loop includes the entire workflow, with the preprocessing and all. 
+
+```{r}
+tic()
+set.seed(4321)
+res_lr <- wfl_lr %>% 
+  tune_grid(
+    resamples = folds,
+    control = control_grid(save_pred = TRUE),
+    grid = grid_lr,
+    metrics = metric_set(accuracy, roc_auc)
+  )
+toc()
+```
+
+We're keeping track of the metrics accuracy and AUC ROC. There's not much use for accuracy here, but it helps to illustrate how those metrics behave. These are the top 5 results from the tuning:
+
+
+```{r}
+res_lr %>% 
+  show_best("roc_auc") %>%
+  select(-.config) %>% 
+  gt() %>% 
+  tab_options(container.height = px(230))
+```
+
+
+
+
+In a plot:
+
+```{r fig.height=3}
+res_lr %>% 
+  collect_metrics() %>% 
+  ggplot(aes(penalty, mean, col = .metric)) +
+  geom_line(size = 1) +
+  geom_point(size = 2) +
+  scale_x_log10() +
+  facet_wrap(~ .metric, scales = "free", nrow = 1) +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  labs(title = "Tuning result for Logistic Regression model")
+```
+
+
+Of course, a CV score of about 0.55 isn't anything to write home about here. Remember that this is a simple baseline model.
+
+We proceed by extracting the best parameters and then refitting those on the entire train data.
+
+```{r}
+best_param_lr <- res_lr %>% 
+  select_best("roc_auc")
+
+wfl_final_lr <- wfl_lr %>% 
+  finalize_workflow(best_param_lr)
+
+fit_final_lr <- wfl_final_lr %>% 
+  fit(data = train)
+```
+
+
+
+It's pretty straightforward to extract feature importances:
+
+```{r}
+fit_final_lr %>% 
+  extract_fit_parsnip() %>% 
+  vip(aesthetics = list(fill = "lightblue")) +
+  theme_minimal() +
+  labs(title = "Feature importances for Logistic Regression model")
+```
+
+And then we use the final model fit for inference on the test set.
+
+```{r}
+submit_lr <- test %>% 
+  select(id) %>% 
+  mutate(song_popularity = predict(fit_final_lr, test, type = "prob") %>% pull(.pred_0))
+
+submit_lr %>% 
+  head(5) %>% 
+  gt() %>% 
+  tab_options(container.height = px(230))
+```
+
+
+Those simple predictions won't get you to the top of the leaderboard. But hopefully they illustrate the modelling approach of the `tidymodels` framework; and allow you to build on it with your own ideas. The tidymodels terminology takes a little getting used to, but is very flexible and powerful for quickly and effectively experimenting with different ideas in a consistent system.
+
+Check out the open [tidymodels book](https://www.tmwr.org) for a comprehensive guide. And best of success!
+
+Thanks for reading; have fun!
+
+
